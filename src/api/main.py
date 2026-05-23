@@ -57,6 +57,9 @@ from .schemas import (
     BlockchainVerificationResponse,
     LegalExportRequest,
     LegalExportResponse,
+    ExplainRequest,
+    OracleExplainRequest,
+    HoneypotDebugRequest,
 )
 
 from ..exceptions import register_exception_handlers, register_observability_middleware
@@ -259,10 +262,8 @@ except (ImportError, SyntaxError) as e:
                                 event_type="graph_pattern",
                                 metadata={"pattern": "chain", "chain_length": chain_length},
                             )
-                except:
-                            print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length}-hop chain")
                 except Exception as e:
-                    logger.error(f"Error: {e}")
+                    logger.error(f"Error in graph pattern analysis: {e}")
                     pass
         
         graph_risk = min(graph_risk, 1.0)
@@ -724,8 +725,6 @@ async def lifespan(app: FastAPI):
             "innovations": INNOVATIONS_AVAILABLE,
         },
     )
-    asyncio.ensure_future(_honeypot_auto_release_loop())
-        print("⚠ Innovation modules not available")
     
     print("=" * 80)
     print("AegisGraph Sentinel 2.0 is ready")
@@ -1165,7 +1164,7 @@ async def check_transaction(request: TransactionCheckRequest):
     summary="Generate AI-explainable decision explanation",
     description="Innovation 5: Aegis-Oracle generates regulatory-compliant explanations for all fraud decisions. Includes causal factors, evidence,  and legal admissibility."
 )
-async def explain_transaction(payload: dict):
+async def explain_transaction(request: ExplainRequest):
     """
     Generate comprehensive explanation for a fraud decision
     
@@ -1188,29 +1187,29 @@ async def explain_transaction(payload: dict):
     try:
         # Extract transaction and risk info
         transaction = {
-            'transaction_id': payload.get('transaction_id', 'TXN_UNKNOWN'),
-            'source_account': payload.get('source_account'),
-            'target_account': payload.get('target_account'),
-            'amount': payload.get('amount', 0),
-            'currency': payload.get('currency', 'INR'),
-            'timestamp': payload.get('timestamp'),
-            'behavioral_stress_detected': payload.get('behavioral_stress_detected', False),
+            'transaction_id': request.transaction_id,
+            'source_account': request.source_account,
+            'target_account': request.target_account,
+            'amount': request.amount,
+            'currency': request.currency,
+            'timestamp': request.timestamp,
+            'behavioral_stress_detected': request.behavioral_stress_detected,
         }
         
         risk_assessment = {
-            'decision': payload.get('decision', 'ALLOW'),
-            'risk_score': payload.get('risk_score', 0.0),
-            'confidence': payload.get('confidence', 0.85),
+            'decision': request.decision,
+            'risk_score': request.risk_score,
+            'confidence': request.confidence,
         }
         
-        breakdown = payload.get('breakdown') or {
+        breakdown = request.breakdown.model_dump() if request.breakdown else {
             'graph': 0.0,
             'velocity': 0.0,
             'behavior': 0.0,
             'entropy': 0.0,
         }
         
-        innovations_triggered = payload.get('innovations_triggered', [])
+        innovations_triggered = request.innovations_triggered
         
         # Use Aegis-Oracle to generate explanation
         explanation = state.aegis_oracle.generate_explanation(
@@ -1237,7 +1236,7 @@ async def explain_transaction(payload: dict):
     summary="Get comprehensive AI reasoning for fraud decisions",
     description="Advanced Aegis-Oracle endpoint with full forensic analysis and causal reasoning"
 )
-async def oracle_explain_detailed(payload: dict):
+async def oracle_explain_detailed(request: OracleExplainRequest):
     """
     Advanced explainability endpoint with detailed forensic analysis
     
@@ -1254,11 +1253,11 @@ async def oracle_explain_detailed(payload: dict):
     
     try:
         explanation = state.aegis_oracle.generate_explanation(
-            transaction=payload.get('transaction', {}),
-            risk_assessment=payload.get('risk_assessment', {}),
-            attention_weights=payload.get('attention_weights', {}),
-            break_down=payload.get('risk_breakdown', {}),
-            innovations_triggered=payload.get('innovations_triggered', []),
+            transaction=request.transaction,
+            risk_assessment=request.risk_assessment,
+            attention_weights=request.attention_weights,
+            break_down=request.risk_breakdown,
+            innovations_triggered=request.innovations_triggered,
         )
         
         return {
@@ -1281,18 +1280,18 @@ if os.getenv("DEBUG", "false").lower() == "true":
         summary="Force honeypot activation (DEBUG mode only)",
         description="Available only when DEBUG env var is 'true'. For testing only.",
     )
-    def debug_activate_honeypot(payload: dict):
+    def debug_activate_honeypot(request: HoneypotDebugRequest):
         if state.honeypot_manager is None:
             raise HTTPException(status_code=500, detail="Honeypot manager not initialized")
         try:
             hp = state.honeypot_manager.activate_honeypot(
-                transaction_id=payload.get('transaction_id', 'DEBUG'),
-                source_account=payload.get('source_account', 'SRC'),
-                target_account=payload.get('target_account', 'TGT'),
-                amount=payload.get('amount', 0.0),
-                currency=payload.get('currency', 'INR'),
-                risk_score=payload.get('risk_score', 1.0),
-                fraud_indicators=payload.get('fraud_indicators', []),
+                transaction_id=request.transaction_id,
+                source_account=request.source_account,
+                target_account=request.target_account,
+                amount=request.amount,
+                currency=request.currency,
+                risk_score=request.risk_score,
+                fraud_indicators=request.fraud_indicators,
             )
             return {'honeypot_id': hp.honeypot_id, 'status': hp.status.value}
         except Exception as e:

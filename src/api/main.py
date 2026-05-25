@@ -30,7 +30,6 @@ from typing import Dict, List
 import uvicorn
 import random
 import json
-import pickle
 import networkx as nx
 import numpy as np
 
@@ -546,38 +545,38 @@ def _load_runtime_configuration(startup_logger):
 def _load_graph_runtime_data(startup_logger):
     try:
         # === SECURE GRAPH LOADING ===
-        # Prefer GraphML, but keep compatibility with the legacy trusted gpickle artifact.
         graph_candidates = [
             Path(os.getenv("AEGIS_GRAPH_PATH")) if os.getenv("AEGIS_GRAPH_PATH") else None,
             Path("data/synthetic/graph.graphml"),
-            Path("data/synthetic/graph.gpickle"),
         ]
         graph_path = next((path for path in graph_candidates if path and path.exists()), None)
         
-        # TODO: Replace this with the actual SHA256 of your generated graph.graphml
-        EXPECTED_GRAPH_SHA256 = None   # Example: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        EXPECTED_GRAPH_SHA256 = os.environ.get("AEGIS_GRAPH_SHA256")
         
         if graph_path:
             with open(graph_path, "rb") as f:
                 file_bytes = f.read()
                 actual_hash = hashlib.sha256(file_bytes).hexdigest()
             
-            if EXPECTED_GRAPH_SHA256 and actual_hash != EXPECTED_GRAPH_SHA256:
+            if not EXPECTED_GRAPH_SHA256:
                 raise RuntimeError(
-                    f"SECURITY ALERT: {graph_path} integrity check FAILED!\n"
-                    f"Expected SHA256: {EXPECTED_GRAPH_SHA256}\n"
-                    f"Actual SHA256:   {actual_hash}\n"
-                    "Possible file tampering or corrupted artifact. Aborting startup."
+                    "Critical Security Alert: AEGIS_GRAPH_SHA256 env var is unset. "
+                    "Halting boot to prevent loading an unverified graph artifact."
+                )
+            if actual_hash != EXPECTED_GRAPH_SHA256:
+                raise RuntimeError(
+                    f"Critical Security Alert: {graph_path} hash mismatch. Halting boot.\n"
+                    f"Expected: {EXPECTED_GRAPH_SHA256}\n"
+                    f"Actual:   {actual_hash}"
                 )
             
-            if graph_path.suffix.lower() == ".graphml":
-                state.transaction_graph = nx.read_graphml(graph_path)
-            elif graph_path.suffix.lower() == ".gpickle":
-                with open(graph_path, "rb") as f:
-                    state.transaction_graph = pickle.load(f)
-            else:
-                raise ValueError(f"Unsupported graph artifact format: {graph_path.suffix}")
-            _startup_logger.info(
+            if graph_path.suffix.lower() != ".graphml":
+                raise ValueError(
+                    f"Unsupported graph artifact format: {graph_path.suffix}. "
+                    "Only .graphml is accepted."
+                )
+            state.transaction_graph = nx.parse_graphml(file_bytes.decode("utf-8"))
+            startup_logger.info(
                 "Loaded transaction graph",
                 event_type="graph_loaded",
                 metadata={
@@ -591,7 +590,7 @@ def _load_graph_runtime_data(startup_logger):
             state.graph_loaded = True
         else:
             startup_logger.warning(
-                "Graph file not found at data/synthetic/graph.gpickle",
+                "Graph file not found at data/synthetic/graph.graphml",
                 event_type="graph_missing",
             )
             print("⚠ Graph file not found at data/synthetic/graph.graphml")

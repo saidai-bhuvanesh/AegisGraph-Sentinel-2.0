@@ -867,6 +867,8 @@ class BlockchainEvidenceManager:
 
         block_number = int(evidence.get('block_number', 0))
         verification = self.verify_evidence(evidence_id, block_number)
+        if not verification.get('verified'):
+            return {'error': 'Evidence verification failed - integrity compromised'}
         block = self._load_block_metadata(block_number, evidence)
         block = block or self._block_metadata_from_evidence(evidence) or {}
 

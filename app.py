@@ -915,16 +915,18 @@ elif page == "📊 Risk Analytics":
         # Calculate new risk score based on real-time alerts
         new_risk = np.random.normal(loc=30, scale=5.0)
         if 'realtime_alerts' in st.session_state and len(st.session_state.realtime_alerts) > 0:
-            latest_alert = st.session_state.realtime_alerts[0]
-            # Link to alert severity if fresh (within 3 seconds)
-            time_diff = (pd.Timestamp.now() - latest_alert['time']).total_seconds()
-            if time_diff < 3:
-                if latest_alert['severity'] == "Critical":
-                    new_risk = np.random.normal(loc=95, scale=2.0)
-                elif latest_alert['severity'] == "High":
-                    new_risk = np.random.normal(loc=82, scale=4.0)
-                elif latest_alert['severity'] == "Medium":
-                    new_risk = np.random.normal(loc=65, scale=6.0)
+            active_alerts_for_risk = [a for a in st.session_state.realtime_alerts if a.get('status', 'Active') != 'Resolved']
+            if active_alerts_for_risk:
+                latest_alert = active_alerts_for_risk[0]
+                # Link to alert severity if fresh (within 3 seconds)
+                time_diff = (pd.Timestamp.now() - latest_alert['time']).total_seconds()
+                if time_diff < 3:
+                    if latest_alert['severity'] == "Critical":
+                        new_risk = np.random.normal(loc=95, scale=2.0)
+                    elif latest_alert['severity'] == "High":
+                        new_risk = np.random.normal(loc=82, scale=4.0)
+                    elif latest_alert['severity'] == "Medium":
+                        new_risk = np.random.normal(loc=65, scale=6.0)
         new_risk = max(0, min(100, new_risk))
         
         st.session_state.risk_latency_history.append(new_latency)
@@ -997,62 +999,109 @@ elif page == "📊 Risk Analytics":
         
         st.plotly_chart(fig_lat, use_container_width=True)
         
-        st.subheader("🌐 Global Fraud Risk Index")
-        st.markdown("**Real-time aggregate risk score driven by live alert severities**")
-        
-        # Build Risk Trend Chart
-        risk_df = pd.DataFrame({
-            'Time': st.session_state.risk_time_history,
-            'RiskScore': st.session_state.fraud_risk_score_history
-        })
-        
-        # Color line based on latest risk score
-        current_risk = risk_df['RiskScore'].iloc[-1]
-        if current_risk >= 80:
-            line_color = '#ef4444'
-            fill_color = 'rgba(239, 68, 68, 0.2)'
-        elif current_risk >= 50:
-            line_color = '#f59e0b'
-            fill_color = 'rgba(245, 158, 11, 0.2)'
-        else:
-            line_color = '#10b981'
-            fill_color = 'rgba(16, 185, 129, 0.2)'
+        def render_risk_and_threat_charts():
+            risk_col, threat_col = st.columns([2, 1])
             
-        fig_risk = go.Figure()
-        
-        # Gradient area fill
-        fig_risk.add_trace(go.Scatter(
-            x=risk_df['Time'], 
-            y=risk_df['RiskScore'],
-            fill='tozeroy',
-            mode='lines',
-            line=dict(color=line_color, width=3),
-            fillcolor=fill_color,
-            name="Risk Index"
-        ))
-        
-        # Add spike markers for high risk
-        high_risk_points = risk_df[risk_df['RiskScore'] >= 80]
-        if not high_risk_points.empty:
-            fig_risk.add_trace(go.Scatter(
-                x=high_risk_points['Time'],
-                y=high_risk_points['RiskScore'],
-                mode='markers',
-                marker=dict(color='#ef4444', size=10, symbol='diamond-open', line=dict(width=2, color='#ef4444')),
-                name="Critical Anomaly"
-            ))
-            
-        fig_risk.update_layout(
-            height=200,
-            margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            hovermode='x unified',
-            showlegend=False,
-            yaxis=dict(range=[0, 100], title="Risk Score", gridcolor='rgba(255,255,255,0.1)'),
-            xaxis=dict(showgrid=False)
-        )
-        st.plotly_chart(fig_risk, use_container_width=True)
+            with risk_col:
+                st.subheader("🌐 Global Fraud Risk Index")
+                st.markdown("**Real-time aggregate risk score driven by live alert severities**")
+                
+                # Build Risk Trend Chart
+                risk_df = pd.DataFrame({
+                    'Time': st.session_state.risk_time_history,
+                    'RiskScore': st.session_state.fraud_risk_score_history
+                })
+                
+                # Color line based on latest risk score
+                current_risk = risk_df['RiskScore'].iloc[-1]
+                if current_risk >= 80:
+                    line_color = '#ef4444'
+                    fill_color = 'rgba(239, 68, 68, 0.2)'
+                elif current_risk >= 50:
+                    line_color = '#f59e0b'
+                    fill_color = 'rgba(245, 158, 11, 0.2)'
+                else:
+                    line_color = '#10b981'
+                    fill_color = 'rgba(16, 185, 129, 0.2)'
+                    
+                fig_risk = go.Figure()
+                
+                # Gradient area fill
+                fig_risk.add_trace(go.Scatter(
+                    x=risk_df['Time'], 
+                    y=risk_df['RiskScore'],
+                    fill='tozeroy',
+                    mode='lines',
+                    line=dict(color=line_color, width=3),
+                    fillcolor=fill_color,
+                    name="Risk Index"
+                ))
+                
+                # Add spike markers for high risk
+                high_risk_points = risk_df[risk_df['RiskScore'] >= 80]
+                if not high_risk_points.empty:
+                    fig_risk.add_trace(go.Scatter(
+                        x=high_risk_points['Time'],
+                        y=high_risk_points['RiskScore'],
+                        mode='markers',
+                        marker=dict(color='#ef4444', size=10, symbol='diamond-open', line=dict(width=2, color='#ef4444')),
+                        name="Critical Anomaly"
+                    ))
+                    
+                fig_risk.update_layout(
+                    height=200,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    hovermode='x unified',
+                    showlegend=False,
+                    yaxis=dict(range=[0, 100], title="Risk Score", gridcolor='rgba(255,255,255,0.1)'),
+                    xaxis=dict(showgrid=False)
+                )
+                st.plotly_chart(fig_risk, use_container_width=True)
+                
+            with threat_col:
+                st.subheader("🍩 Threat Distribution")
+                st.markdown("**Live severity breakdown**")
+                
+                if 'realtime_alerts' in st.session_state and len(st.session_state.realtime_alerts) > 0:
+                    alerts = st.session_state.realtime_alerts
+                    # Calculate active threats only
+                    active_alerts = [a for a in alerts if a.get('status', 'Active') != 'Resolved']
+                    
+                    if not active_alerts:
+                        st.info("No active threats.")
+                    else:
+                        sev_counts = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0}
+                        for a in active_alerts:
+                            sev_counts[a['severity']] += 1
+                        
+                        labels = list(sev_counts.keys())
+                        values = list(sev_counts.values())
+                        colors = ['#ef4444', '#f97316', '#f59e0b', '#10b981'] # Critical, High, Medium, Low
+                        
+                        fig_pie = go.Figure(data=[go.Pie(
+                            labels=labels, 
+                            values=values, 
+                            hole=.6,
+                            marker=dict(colors=colors, line=dict(color='#0b0f19', width=2)),
+                            textinfo='none',
+                            hoverinfo='label+percent'
+                        )])
+                        fig_pie.update_layout(
+                            height=200,
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            showlegend=False,
+                            annotations=[dict(text=f"{len(active_alerts)}", x=0.5, y=0.5, font_size=24, showarrow=False, font_color="white")]
+                        )
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.info("No active threats.")
+                    
+        # Call the modularized function
+        render_risk_and_threat_charts()
         
         st.subheader("🧠 AI Decision Breakdown Engine")
         
@@ -1166,7 +1215,70 @@ elif page == "📊 Risk Analytics":
             
     st.markdown("---")
     
-    st.subheader("📈 Realtime Alert Analytics")
+    # Fraud Heatmap Visualization
+    st.subheader("🗺️ Global Threat Telemetry")
+    st.markdown("**Real-time geolocation of active fraud vectors**")
+    
+    if 'realtime_alerts' in st.session_state and len(st.session_state.realtime_alerts) > 0:
+        active_threats = [a for a in st.session_state.realtime_alerts if a.get('status', 'Active') != 'Resolved']
+        
+        if active_threats:
+            geo_df = pd.DataFrame(active_threats)
+            
+            size_map = {"Critical": 24, "High": 16, "Medium": 10, "Low": 6}
+            color_map = {"Critical": "#ef4444", "High": "#f97316", "Medium": "#f59e0b", "Low": "#10b981"}
+            
+            geo_df['size'] = geo_df['severity'].map(size_map)
+            geo_df['color'] = geo_df['severity'].map(color_map)
+            
+            fig_geo = go.Figure(go.Scattergeo(
+                lon = geo_df['lon'],
+                lat = geo_df['lat'],
+                text = geo_df['title'] + '<br>' + geo_df['severity'],
+                mode = 'markers',
+                marker = dict(
+                    size = geo_df['size'],
+                    color = geo_df['color'],
+                    line = dict(width=1, color='rgba(255, 255, 255, 0.5)'),
+                    opacity = 0.8
+                )
+            ))
+            
+            fig_geo.update_geos(
+                projection_type="natural earth",
+                showcoastlines=True, coastlinecolor="rgba(255, 255, 255, 0.1)",
+                showland=True, landcolor="rgba(30, 41, 59, 0.5)",
+                showocean=True, oceancolor="rgba(15, 23, 42, 0.5)",
+                showlakes=True, lakecolor="rgba(15, 23, 42, 0.5)",
+                showcountries=True, countrycolor="rgba(255, 255, 255, 0.1)",
+                bgcolor="rgba(0,0,0,0)"
+            )
+            
+            fig_geo.update_layout(
+                height=350,
+                margin={"r":0,"t":0,"l":0,"b":0},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig_geo, use_container_width=True)
+        else:
+            st.info("No active geolocation threats detected.")
+            
+    st.markdown("---")
+    
+    export_col1, export_col2 = st.columns([4, 1])
+    with export_col1:
+        st.subheader("📈 Realtime Alert Analytics")
+    with export_col2:
+        if 'realtime_alerts' in st.session_state and st.session_state.realtime_alerts:
+            csv_data = pd.DataFrame(st.session_state.realtime_alerts).to_csv(index=False)
+            st.download_button(
+                label="📥 Export Intel",
+                data=csv_data,
+                file_name=f"threat_intel_export_{int(time.time())}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
     with summary_col1:
         st.metric("Active Threats", f"{active_threats if 'realtime_alerts' in st.session_state else 12}", "+2 this hour")
@@ -1185,10 +1297,10 @@ elif page == "📊 Risk Analytics":
         # Initialize alerts
         if 'realtime_alerts' not in st.session_state:
             st.session_state.realtime_alerts = [
-                {"id": "AL-1001", "time": pd.Timestamp.now() - pd.Timedelta(seconds=45), "severity": "Critical", "title": "Mule Ring Topology Detected (Fan-out)", "category": "Graph"},
-                {"id": "AL-1002", "time": pd.Timestamp.now() - pd.Timedelta(seconds=120), "severity": "High", "title": "Velocity Spike on ACC00003254", "category": "Velocity"},
-                {"id": "AL-1003", "time": pd.Timestamp.now() - pd.Timedelta(minutes=5), "severity": "Medium", "title": "Hesitation Cadence Anomaly", "category": "Biometric"},
-                {"id": "AL-1004", "time": pd.Timestamp.now() - pd.Timedelta(minutes=15), "severity": "Low", "title": "Unusual Device Fingerprint", "category": "Device"}
+                {"id": "AL-1001", "time": pd.Timestamp.now() - pd.Timedelta(seconds=45), "severity": "Critical", "title": "Mule Ring Topology Detected (Fan-out)", "category": "Graph", "status": "Active", "lat": 51.50, "lon": -0.12},
+                {"id": "AL-1002", "time": pd.Timestamp.now() - pd.Timedelta(seconds=120), "severity": "High", "title": "Velocity Spike on ACC00003254", "category": "Velocity", "status": "Active", "lat": 40.71, "lon": -74.00},
+                {"id": "AL-1003", "time": pd.Timestamp.now() - pd.Timedelta(minutes=5), "severity": "Medium", "title": "Hesitation Cadence Anomaly", "category": "Biometric", "status": "Active", "lat": 35.67, "lon": 139.65},
+                {"id": "AL-1004", "time": pd.Timestamp.now() - pd.Timedelta(minutes=15), "severity": "Low", "title": "Unusual Device Fingerprint", "category": "Device", "status": "Active", "lat": 1.35, "lon": 103.81}
             ]
             
         # Simulate incoming alerts if live
@@ -1205,12 +1317,17 @@ elif page == "📊 Risk Analytics":
                 "Critical": ["Mule Ring Topology Detected", "Large Value Extraction", "Account Takeover Pattern"]
             }
             
+            hubs = [(40.71, -74.00), (51.50, -0.12), (35.67, 139.65), (1.35, 103.81), (37.77, -122.41), (50.11, 8.68)]
+            base_lat, base_lon = hubs[np.random.randint(0, len(hubs))]
             new_alert = {
                 "id": f"AL-{int(time.time())}",
                 "time": pd.Timestamp.now(),
                 "severity": sev,
                 "title": np.random.choice(titles[sev]),
-                "category": categories[sev]
+                "category": categories[sev],
+                "status": "Active",
+                "lat": base_lat + np.random.normal(0, 5.0),
+                "lon": base_lon + np.random.normal(0, 5.0)
             }
             # Prepend and keep max 50 alerts safely
             st.session_state.realtime_alerts = [new_alert] + st.session_state.realtime_alerts[:49]
@@ -1233,6 +1350,27 @@ elif page == "📊 Risk Analytics":
             and (search_term.lower() in a["title"].lower() or search_term.lower() in a["category"].lower() or search_term.lower() in a["id"].lower())
         ]
         
+        # Investigation Timeline
+        if 'investigate_alert_id' in st.session_state and st.session_state.investigate_alert_id:
+            inv_id = st.session_state.investigate_alert_id
+            target_alert = next((a for a in st.session_state.realtime_alerts if a['id'] == inv_id), None)
+            if target_alert:
+                st.info(f"🔎 **Active Investigation:** {target_alert['title']} (`{inv_id}`)")
+                timeline_col1, timeline_col2 = st.columns([3, 1])
+                
+                with timeline_col1:
+                    t = target_alert['time']
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=45)).strftime('%H:%M:%S')}** &nbsp; 🟢 Initial Login (Normal IP)")
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=10)).strftime('%H:%M:%S')}** &nbsp; 🟡 Security Settings Changed (2FA Disabled)")
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=2)).strftime('%H:%M:%S')}** &nbsp; 🔴 Large Transfer Initiated")
+                    st.markdown(f"**{t.strftime('%H:%M:%S')}** &nbsp; 🚨 **ALERT TRIGGERED:** {target_alert['title']}")
+                with timeline_col2:
+                    st.markdown("<br><br>", unsafe_allow_html=True)
+                    if st.button("Close Investigation", use_container_width=True, type="primary"):
+                        st.session_state.investigate_alert_id = None
+                        st.rerun()
+                st.markdown("---")
+
         # Render Alerts
         st.markdown('<div style="max-height: 400px; overflow-y: auto; padding-right: 10px; margin-top: 15px;">', unsafe_allow_html=True)
         if not filtered_alerts:
@@ -1240,14 +1378,32 @@ elif page == "📊 Risk Analytics":
         else:
             for alert in filtered_alerts:
                 time_str = alert["time"].strftime("%H:%M:%S")
-                html = f"""
-                <div class="alert-card">
-                    <span class="alert-time">{time_str}</span>
-                    <span class="alert-title">[{alert['category']}] {alert['title']} <span style="color:#64748b; font-size:0.75rem; margin-left:8px;">#{alert['id']}</span></span>
-                    <span class="severity-badge severity-{alert['severity']}">{alert['severity']}</span>
-                </div>
-                """
-                st.markdown(html, unsafe_allow_html=True)
+                is_resolved = alert.get('status', 'Active') == 'Resolved'
+                opacity = "0.5" if is_resolved else "1.0"
+                status_badge = "Resolved" if is_resolved else alert['severity']
+                
+                alert_col, inv_col, btn_col = st.columns([4, 1, 1])
+                with alert_col:
+                    html = f"""
+                    <div class="alert-card" style="opacity: {opacity}; margin-bottom: 0;">
+                        <span class="alert-time">{time_str}</span>
+                        <span class="alert-title">[{alert['category']}] {alert['title']} <span style="color:#64748b; font-size:0.75rem; margin-left:8px;">#{alert['id']}</span></span>
+                        <span class="severity-badge severity-{alert['severity']}">{status_badge}</span>
+                    </div>
+                    """
+                    st.markdown(html, unsafe_allow_html=True)
+                with inv_col:
+                    if st.button("Investigate", key=f"inv_{alert['id']}", use_container_width=True):
+                        st.session_state.investigate_alert_id = alert['id']
+                        st.rerun()
+                with btn_col:
+                    if not is_resolved:
+                        if st.button("Resolve", key=f"resolve_{alert['id']}", use_container_width=True):
+                            alert['status'] = 'Resolved'
+                            st.rerun()
+                    else:
+                        st.button("Resolved", key=f"resolved_{alert['id']}", disabled=True, use_container_width=True)
+                st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     if is_live:

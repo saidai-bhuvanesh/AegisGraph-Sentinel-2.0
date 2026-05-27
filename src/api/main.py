@@ -402,7 +402,6 @@ try:
     from ..features.honeypot_escrow import HoneypotEscrowManager
     from ..features.blockchain_evidence import BlockchainEvidenceManager
     from ..features.aegis_oracle_explainer import AegisOracleExplainer
-    from ..features.lateral_movement import LateralMovementDetector
     INNOVATIONS_AVAILABLE = True
 except (ImportError, SyntaxError) as e:
     _api_logger.warning(
@@ -723,6 +722,18 @@ except (ImportError, SyntaxError) as e:
         }
 
 
+try:
+    from ..features.lateral_movement import LateralMovementDetector
+    LATERAL_MOVEMENT_AVAILABLE = True
+except (ImportError, SyntaxError) as e:
+    _api_logger.warning(
+        f"Lateral movement module not available ({e})",
+        event_type="lateral_movement_import_fallback",
+    )
+    LATERAL_MOVEMENT_AVAILABLE = False
+    LateralMovementDetector = None
+
+
 # Global state
 class AppState:
     """Application state"""
@@ -962,9 +973,11 @@ def _initialize_innovation_runtime(startup_logger):
                 f"Aegis-Oracle initialization failed: {e}",
                 event_type="innovation_init_failed",
             )
-        
+
+    if LATERAL_MOVEMENT_AVAILABLE:
         try:
             state.lateral_movement_detector = LateralMovementDetector()
+            state.services.register_service("lateral_movement_detector", state.lateral_movement_detector, replace=True)
             startup_logger.info("Lateral Movement Detector initialized", event_type="innovation_ready")
         except Exception as e:
             startup_logger.warning(
@@ -1027,7 +1040,7 @@ def _run_scoring_pipeline(
         biometrics=biometrics,
     )
 
-    if innovations_available and lateral_detector is not None:
+    if lateral_detector is not None:
         try:
             lateral_detector.update_graph(source_account, target_account)
             lm_risk_added, is_pivoting = lateral_detector.analyze_account(source_account)
@@ -1343,7 +1356,7 @@ async def check_transaction(request: TransactionCheckRequest):
                 biometrics,
                 request.source_account,
                 request.target_account,
-                state.lateral_movement_detector if INNOVATIONS_AVAILABLE else None,
+                state.lateral_movement_detector if LATERAL_MOVEMENT_AVAILABLE else None,
                 INNOVATIONS_AVAILABLE,
             ),
         )

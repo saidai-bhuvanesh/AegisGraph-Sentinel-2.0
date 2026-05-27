@@ -3,6 +3,7 @@ FastAPI Application for AegisGraph Sentinel 2.0
 
 Real-time fraud detection API service
 """
+from __future__ import annotations
 # Working on fraud detection API endpoints and streamlit integration
 # SECURITY NOTE:
 # We use pickle ONLY to load our own internally-generated synthetic graph

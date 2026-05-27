@@ -35,6 +35,7 @@ import random
 import json
 import networkx as nx
 import numpy as np
+from enum import Enum
 
 from ..config import get_settings
 from ..config.validation import validate_environment
@@ -71,6 +72,37 @@ from ..observability import get_audit_logger, get_logger
 _api_logger = get_logger("api")
 _audit_logger = get_audit_logger()
 settings = get_settings()
+
+
+class FraudDecision(str, Enum):
+    ALLOW = "ALLOW"
+    REVIEW = "REVIEW"
+    BLOCK = "BLOCK"
+
+
+_DECISION_VALUES = {decision.value for decision in FraudDecision}
+_API_DECISION_MAP = {
+    FraudDecision.ALLOW.value: "approve",
+    FraudDecision.REVIEW.value: "review",
+    FraudDecision.BLOCK.value: "block",
+}
+
+
+def _normalize_decision(decision: object) -> str:
+    normalized_decision = str(decision).upper() if decision is not None else FraudDecision.ALLOW.value
+    if normalized_decision in _DECISION_VALUES:
+        return normalized_decision
+
+    _api_logger.warning(
+        "Unexpected decision encountered; defaulting to ALLOW",
+        event_type="decision_normalization_warning",
+        metadata={"decision": str(decision)},
+    )
+    return FraudDecision.ALLOW.value
+
+
+def _decision_to_api_value(decision: object) -> str:
+    return _API_DECISION_MAP[_normalize_decision(decision)]
 
 
 def _require_honeypot_admin(x_honeypot_token: str | None) -> None:
@@ -476,7 +508,7 @@ except (ImportError, SyntaxError) as e:
         elif decision == "REVIEW":
             action = "MANUAL REVIEW: Flag for analyst investigation before approval"
         else:
-            action = "APPROVE: Transaction cleared for processing"
+            action = "ALLOW: Transaction cleared for processing"
         
         # Add account-specific warnings
         if transaction:
@@ -501,7 +533,7 @@ class AppState:
         self.lateral_movement_detector = None
         self.start_time = time.time()
         self.requests_processed = 0
-        self.decisions = {"ALLOW": 0, "REVIEW": 0, "BLOCK": 0}
+        self.decisions = {decision.value: 0 for decision in FraudDecision}
         self.total_risk_score = 0.0
         self.total_processing_time = 0.0
         self.model_loaded = False
@@ -1146,8 +1178,8 @@ async def check_transaction(request: TransactionCheckRequest):
                     fraud_indicators=fraud_indicators,
                 )
                 
-                logic_decision = 'ALLOW' if risk_result['decision'] == 'APPROVE' else risk_result['decision']
-                if should_activate and logic_decision == 'BLOCK':
+                logic_decision = _normalize_decision(risk_result['decision'])
+                if should_activate and logic_decision == FraudDecision.BLOCK.value:
                     # Activate honeypot
                     honeypot = await loop.run_in_executor(
                         None,
@@ -1168,7 +1200,7 @@ async def check_transaction(request: TransactionCheckRequest):
                     
                     # Override decision to show fake success
                     risk_result['decision'] = 'ALLOW'
-                    explanation_result['explanation'] = "Transaction approved (honeypot trap activated)"
+                    explanation_result['explanation'] = "Transaction allowed (honeypot trap activated)"
                     explanation_result['recommended_action'] = "SHOW_SUCCESS_MONITOR_WITHDRAWAL"
                     
                     _audit_logger.log_security_action(
@@ -1190,8 +1222,8 @@ async def check_transaction(request: TransactionCheckRequest):
         
         if INNOVATIONS_AVAILABLE and state.blockchain_manager is not None:
             try:
-                logic_decision = 'ALLOW' if risk_result['decision'] == 'APPROVE' else risk_result['decision']
-                if logic_decision in ['BLOCK', 'REVIEW'] or honeypot_activated:
+                logic_decision = _normalize_decision(risk_result['decision'])
+                if logic_decision in [FraudDecision.BLOCK.value, FraudDecision.REVIEW.value] or honeypot_activated:
                     # Extract fraud patterns from explanation
                     fraud_patterns = []
                     if 'mule' in explanation_result['explanation'].lower():
@@ -1239,29 +1271,14 @@ async def check_transaction(request: TransactionCheckRequest):
         processing_time_ms = (time.time() - start_time) * 1000
         
         # Update statistics
-        internal_decision = risk_result['decision']
-        logic_decision = 'ALLOW' if internal_decision == 'APPROVE' else internal_decision
-        if logic_decision not in state.decisions:
-            logic_decision = 'ALLOW'
+        internal_decision = _normalize_decision(risk_result['decision'])
         state.requests_processed += 1
-        state.decisions[logic_decision] += 1
+        state.decisions[internal_decision] += 1
         state.total_risk_score += risk_result['risk_score']
         state.total_processing_time += processing_time_ms
         
         # Prepare response with innovation fields
-        decision_map = {
-            'ALLOW': 'approve',
-            'APPROVE': 'approve',
-            'REVIEW': 'review',
-            'BLOCK': 'block',
-        }
-        decision = decision_map.get(internal_decision, internal_decision.lower())
-        raw_decision = risk_result['decision']
-        decision = {
-            'ALLOW': 'approve',
-            'REVIEW': 'review',
-            'BLOCK': 'block',
-        }.get(raw_decision, str(raw_decision).lower())
+        decision = _decision_to_api_value(internal_decision)
         response = TransactionCheckResponse(
             transaction_id=request.transaction_id,
             risk_score=risk_result['risk_score'],
@@ -1294,7 +1311,7 @@ async def check_transaction(request: TransactionCheckRequest):
             triggered_modules.append("blockchain_evidence")
         _audit_logger.log_fraud_decision(
             transaction_id=request.transaction_id,
-            decision=logic_decision,
+            decision=internal_decision,
             risk_score=risk_result['risk_score'],
             triggered_modules=triggered_modules,
             metadata={
@@ -1464,7 +1481,7 @@ async def check_batch_transactions(request: BatchTransactionRequest):
     start_time = time.time()
     
     results = []
-    stats = {"ALLOW": 0, "REVIEW": 0, "BLOCK": 0}
+    stats = {decision.value: 0 for decision in FraudDecision}
 
     semaphore = asyncio.Semaphore(8)
     # Lock the iterator into memory so we can read it twice
@@ -1489,11 +1506,15 @@ async def check_batch_transactions(request: BatchTransactionRequest):
             continue
 
         results.append(result)
-        decision_key = str(result.decision).upper()
-        if decision_key == "APPROVE":
-            decision_key = "ALLOW"
-        if decision_key not in stats:
-            decision_key = "ALLOW"
+        api_to_internal = {
+            "approve": FraudDecision.ALLOW.value,
+            "review": FraudDecision.REVIEW.value,
+            "block": FraudDecision.BLOCK.value,
+        }
+        decision_key = api_to_internal.get(
+            str(result.decision).lower(),
+            FraudDecision.ALLOW.value,
+        )
         stats[decision_key] += 1
     
     processing_time_ms = (time.time() - start_time) * 1000

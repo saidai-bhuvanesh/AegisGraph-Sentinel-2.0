@@ -7,6 +7,10 @@ Real-time Fraud Detection Interface
 import logging
 logger = logging.getLogger(__name__)
 import streamlit as st
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 import requests
 import json
 import base64
@@ -37,6 +41,12 @@ API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 def _accessible_status(emoji: str, label: str) -> str:
     """Return a visual status with an adjacent plain-text equivalent."""
     return f"{emoji} {label} ({label})"
+
+
+def _schedule_live_refresh(interval_ms: int = 1500) -> None:
+    """Request a non-blocking dashboard refresh when the helper is available."""
+    if st_autorefresh is not None:
+        st_autorefresh(interval=interval_ms, key="command_center_live_refresh")
 
 # Custom CSS
 st.markdown("""
@@ -282,6 +292,7 @@ if page == "🧭 Command Center":
         
     # Generate a live event if active
     if live_mode:
+        _schedule_live_refresh()
         # Local imports consolidated globally
         # Create a mock transaction to send to the backend
         accounts = ["ACC" + str(random.randint(1000, 9999)), "mule_acc_001", "ACC" + str(random.randint(1000, 9999))]
@@ -409,10 +420,6 @@ if page == "🧭 Command Center":
                 st.success(latest['explanation'])
         else:
             st.write("Awaiting transactions...")
-
-    if live_mode:
-        time.sleep(1.5)
-        st.rerun()
 
 # Page: Single Transaction Check
 elif page == "💳 Transaction Scan":

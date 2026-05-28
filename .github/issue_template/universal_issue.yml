@@ -1,93 +1,91 @@
-name: Universal Issue Report
-description: Open a bug report, feature request, task, or support ticket.
-title: "[ISSUE]: <Short Summary>"
-labels: ["triage"]
-body:
-  - type: markdown
-    attributes:
-      value: |
-        ### 🛠️ Welcome! 
-        Thank you for contributing to the project. Please fill out this form to help us understand and address your issue quickly.
+name: "Issue AI-less Classifier"
 
-  - type: dropdown
-    id: issue-category
-    attributes:
-      label: 1. Issue Category
-      description: What type of issue are you raising?
-      options:
-        - 🐛 Bug Report (Something is broken or crashing)
-        - ✨ Feature Request / Enhancement (An idea for something new)
-        - 📋 Task / Chore (Refactoring, updating dependencies, CI/CD work)
-        - 📚 Documentation (Fixing typos, adding README info or docs)
-        - ❓ Question / Support (Need help using the software)
-    validations:
-      required: true
+on:
+  issues:
+    types: [opened, edited]
+  workflow_dispatch: # Allows you to manually trigger a sweep of all existing open issues
 
-  - type: dropdown
-    id: severity-priority
-    attributes:
-      label: 2. Estimated Priority / Severity
-      description: How critical is this issue to the codebase?
-      options:
-        - 🔴 High (Blocker: Application crashes, critical security flaw)
-        - 🟡 Medium (Major: Core feature broken, but workaround exists)
-        - 🔵 Low (Minor: Cosmetic bug, optimization, typo, nice-to-have)
-    validations:
-      required: true
+jobs:
+  label-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Analyze Content and Apply Labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          SINGLE_ISSUE_NUM: ${{ github.event.issue.number }}
+          SINGLE_TITLE: ${{ github.event.issue.title }}
+          SINGLE_BODY: ${{ github.event.issue.body }}
+        run: |
+          import os, sys, re, json, urllib.request
 
-  - type: textarea
-    id: summary
-    attributes:
-      label: 3. Summary & Context
-      description: Provide a clear and concise overview of what needs to be addressed.
-      placeholder: |
-        - What is the current situation?
-        - What is the goal of this issue?
-    validations:
-      required: true
+          token = os.getenv('GITHUB_TOKEN')
+          repo = os.getenv('REPO')
+          event_name = os.getenv('EVENT_NAME')
 
-  - type: textarea
-    id: steps-or-spec
-    attributes:
-      label: 4. Technical Details / Steps to Reproduce
-      description: |
-        - If a bug: Provide clear steps to reproduce it.
-        - If a feature/task: Provide the technical specifications or requirements.
-      placeholder: |
-        For Bugs:
-        1. Run `python main.py`
-        2. Click 'Submit' with empty inputs
-        3. See crash log...
+          # Regex rules matching your exact GSSoC labels from image_bb0dad.png
+          rules = {
+              "type:bug": [r"bug", r"crash", r"error", r"fail", r"broken", r"except", r"issue", r"not working", r"wrong"],
+              "type:performance": [r"slow", r"performance", r"latency", r"optimize", r"speed", r"memory leak", r"fast", r"timeout"],
+              "type:refactor": [r"refactor", r"clean code", r"structure", r"rewrite", r"simplify", r"cleanup"],
+              "type:accessibility": [r"accessibility", r"a11y", r"contrast", r"screen reader", r"aria", r"alt text", r"font size", r"keyboard nav"],
+              "type:docs": [r"doc", r"readme", r"comment", r"typo", r"guide", r"contributing", r"wiki"],
+              "type:testing": [r"test", r"pytest", r"unittest", r"coverage", r"mock", r"assert"],
+              "type:devops": [r"ci/cd", r"workflow", r"docker", r"yaml", r"action", r"pipeline", r"setup", r"deploy"],
+              "type:feature": [r"feature", r"add", r"request", r"create", r"implement", r"new idea", r"enhance"]
+          }
 
-        For Tasks/Features:
-        - Upgrade `pydantic` to v2
-        - Update the corresponding environment variables
-    validations:
-      required: true
+          def get_labels_for_text(title, body):
+              full_text = f"{title or ''} {body or ''}".lower()
+              matched_labels = []
+              for label, patterns in rules.items():
+                  for pattern in patterns:
+                      if re.search(pattern, full_text):
+                          matched_labels.append(label)
+                          break
+              return matched_labels if matched_labels else ["triage"]
 
-  - type: textarea
-    id: outcomes
-    attributes:
-      label: 5. Expected vs. Actual Behavior
-      description: What should happen, and what is happening instead? (Type N/A if this is a general task).
-      placeholder: |
-        Expected: The script handles empty inputs gracefully.
-        Actual: Throws an unhandled ValueValueError.
-    validations:
-      required: true
+          def apply_labels_to_github(issue_num, labels):
+              url = f"https://api.github.com/repos/{repo}/issues/{issue_num}/labels"
+              req = urllib.request.Request(
+                  url, 
+                  data=json.dumps({"labels": labels}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+              )
+              try:
+                  urllib.request.urlopen(req)
+                  print(f"Successfully applied tags {labels} to Issue #{issue_num}")
+              except Exception as e:
+                  print(f"Error applying labels to Issue #{issue_num}: {e}")
 
-  - type: image
-    id: visuals
-    attributes:
-      label: 6. Screenshots, Logs, or Error Tracebacks (Optional)
-      description: Drag and drop screenshots, screen recordings, or paste terminal errors here.
-
-  - type: checkboxes
-    id: verification
-    attributes:
-      label: Final Review
-      options:
-        - label: I have verified that this issue does not duplicate an existing open issue.
-          required: true
-        - label: I promise to follow up if maintainers ask clarifying questions.
-          required: false
+          # ---- EXECUTION ROUTINE ----
+          if event_name == "workflow_dispatch":
+              print("🔄 Manual Sweep Triggered: Fetching all existing open issues...")
+              # Fetch open issues (up to 100 per page for safety)
+              list_url = f"https://api.github.com/repos/{repo}/issues?state=open&per_page=100"
+              req = urllib.request.Request(list_url, headers={"Authorization": f"Bearer {token}"})
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      issues = json.loads(response.read().decode())
+                      for issue in issues:
+                          # Skip Pull Requests (GitHub API lists PRs as issues)
+                          if "pull_request" in issue:
+                              continue
+                          
+                          issue_num = issue["number"]
+                          labels = get_labels_for_text(issue["title"], issue["body"])
+                          apply_labels_to_github(issue_num, labels)
+              except Exception as e:
+                  print(f"Failed to fetch backlog: {e}")
+                  sys.exit(1)
+          else:
+              # Process single event item (newly opened/edited issue)
+              issue_num = os.getenv('SINGLE_ISSUE_NUM')
+              title = os.getenv('SINGLE_TITLE')
+              body = os.getenv('SINGLE_BODY')
+              labels = get_labels_for_text(title, body)
+              apply_labels_to_github(issue_num, labels)
+        shell: python

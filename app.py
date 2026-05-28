@@ -197,6 +197,28 @@ st.markdown("""
         cursor: pointer;
     }
 
+    [data-testid="stSidebar"] [role="radiogroup"] label:focus-within,
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:focus-visible) {
+        outline: 3px solid rgba(45, 212, 191, 0.95) !important;
+        outline-offset: 2px !important;
+        border-color: rgba(45, 212, 191, 0.9) !important;
+        background: rgba(20, 184, 166, 0.16) !important;
+        box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.18) !important;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked),
+    [data-testid="stSidebar"] [role="radiogroup"] label[aria-checked="true"] {
+        border-color: rgba(45, 212, 191, 0.9) !important;
+        background: linear-gradient(135deg, rgba(8, 47, 73, 0.95) 0%, rgba(15, 118, 110, 0.35) 100%) !important;
+        box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.35), 0 8px 24px rgba(15, 118, 110, 0.2) !important;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p,
+    [data-testid="stSidebar"] [role="radiogroup"] label[aria-checked="true"] p {
+        color: #e6fffb !important;
+        font-weight: 800 !important;
+    }
+
     [data-testid="stSidebar"] [role="radiogroup"] label p {
         font-size: 0.98rem !important;
         font-weight: 700 !important;

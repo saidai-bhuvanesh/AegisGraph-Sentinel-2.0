@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from scipy import stats
 import requests
@@ -15,6 +16,7 @@ class AdversarialDriftMonitor:
     def __init__(self, p_value_threshold=0.05, webhook_url=None):
         self.p_value_threshold = p_value_threshold
         self.webhook_url = webhook_url or os.getenv("SLACK_WEBHOOK_URL")
+        self._alert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="drift-alert")
         
         # Load or simulate the baseline data (what the model was trained on)
         self.baselines = self._load_training_baselines()
@@ -41,10 +43,13 @@ class AdversarialDriftMonitor:
         logging.warning(msg)
 
         if self.webhook_url:
-            try:
-                requests.post(self.webhook_url, json={"text": msg}, timeout=2)
-            except Exception as e:
-                logging.error(f"Failed to dispatch webhook alert: {e}")
+            self._alert_executor.submit(self._dispatch_webhook_alert, msg)
+
+    def _dispatch_webhook_alert(self, msg):
+        try:
+            requests.post(self.webhook_url, json={"text": msg}, timeout=2)
+        except Exception as e:
+            logging.error(f"Failed to dispatch webhook alert: {e}")
 
     def evaluate_batch(self, feature_name, live_data_batch):
         """

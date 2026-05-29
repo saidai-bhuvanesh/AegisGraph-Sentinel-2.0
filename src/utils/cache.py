@@ -279,7 +279,15 @@ class GraphOperationCache:
         
         Uses sorted edge set to create consistent hash regardless of node order.
         """
-        edges = sorted([(u, v) for u, v in graph.edges()])
+        edges = sorted(
+            (
+                u,
+                v,
+                graph[u][v].get("weight"),
+                graph[u][v].get("timestamp"),
+            )
+            for u, v in graph.edges()
+        )
         edge_str = str(edges).encode()
         return hashlib.sha256(edge_str).hexdigest()[:16]
 

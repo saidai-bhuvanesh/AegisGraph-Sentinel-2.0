@@ -434,6 +434,7 @@ class RedisLedger:
     """
 
     PREFIX = "aegis"
+    MAX_EVIDENCE_INDEX_SIZE = 10000
 
     def __init__(self, redis_url: str = None):
         self._client = None
@@ -465,7 +466,9 @@ class RedisLedger:
         try:
             key = f"{self.PREFIX}:evidence:{evidence.evidence_id}"
             self._client.set(key, json.dumps(asdict(evidence), default=str))
-            self._client.rpush(f"{self.PREFIX}:evidence:index", evidence.evidence_id)
+            index_key = f"{self.PREFIX}:evidence:index"
+            self._client.rpush(index_key, evidence.evidence_id)
+            self._client.ltrim(index_key, -self.MAX_EVIDENCE_INDEX_SIZE, -1)
             self._client.incr(f"{self.PREFIX}:stats:total_sealed")
         except Exception:
             self._mark_unavailable()

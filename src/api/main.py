@@ -610,7 +610,7 @@ except (ImportError, SyntaxError) as e:
     LATERAL_MOVEMENT_AVAILABLE = False
        
     # Demo mode functions
-    def compute_risk_score(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
+    def _compute_risk_score_fallback(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
         """Enhanced risk scorer with graph-based mule account detection"""
         risk_score = 0.0
         breakdown = {
@@ -859,7 +859,7 @@ except (ImportError, SyntaxError) as e:
             'breakdown': breakdown,
         }
     
-    def generate_explanation(transaction: dict = None, risk_result: dict = None, detail_level: str = 'medium', **kwargs) -> dict:
+    def _generate_explanation_fallback(transaction: dict = None, risk_result: dict = None, detail_level: str = 'medium', **kwargs) -> dict:
         """Enhanced explainer with detailed fraud pattern descriptions"""
         if not risk_result or 'risk_score' not in risk_result:
             return {
@@ -870,7 +870,7 @@ except (ImportError, SyntaxError) as e:
         risk_score = risk_result['risk_score']
         breakdown = risk_result.get('breakdown', {})
         decision = risk_result.get('decision', 'UNKNOWN')
-        
+
         # Build detailed explanation
         explanations = []
         
@@ -926,6 +926,9 @@ except (ImportError, SyntaxError) as e:
             'explanation': explanation,
             'recommended_action': action
         }
+
+    compute_risk_score = _compute_risk_score_fallback
+    generate_explanation = _generate_explanation_fallback
 
 
 try:

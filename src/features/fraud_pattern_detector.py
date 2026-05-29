@@ -255,38 +255,44 @@ class FraudPatternDetector:
         Returns:
             List of detected hubs with risk scores
         """
-        # Count outgoing transfers per account
-        outgoing_counts = defaultdict(list)
-        
+        # Single pass: collect transfers while incrementally aggregating
+        outgoing_counts: Dict[str, List[Dict]] = defaultdict(list)
+        target_sets: Dict[str, set] = defaultdict(set)
+        amount_sums: Dict[str, float] = defaultdict(float)
+
         for txn in transactions:
             source = self._txn_value(txn, 'source_account')
             if source:
                 outgoing_counts[source].append(txn)
-        
+                target_sets[source].add(self._txn_value(txn, 'target_account'))
+                amount_sums[source] += self._txn_value(txn, 'amount', 0)
+
         detected_hubs = []
-        
+
         for account, transfers in outgoing_counts.items():
-            if len(transfers) >= threshold_outgoing:
-                unique_targets = len(set(self._txn_value(t, 'target_account') for t in transfers))
-                avg_amount = np.mean([self._txn_value(t, 'amount', 0) for t in transfers])
-                
+            num_transfers = len(transfers)
+            if num_transfers >= threshold_outgoing:
+                unique_targets = len(target_sets[account])
+                avg_amount = amount_sums[account] / num_transfers
+
                 hub_score = self._score_fan_out_hub(
                     account,
                     transfers,
                     unique_targets,
                     avg_amount,
+                    total_amount=amount_sums[account],
                 )
-                
+
                 detected_hubs.append({
                     'type': 'FAN_OUT_HUB',
                     'account': account,
-                    'outgoing_transfer_count': len(transfers),
+                    'outgoing_transfer_count': num_transfers,
                     'unique_targets': unique_targets,
                     'avg_transfer_amount': avg_amount,
-                    'total_distributed': sum(self._txn_value(t, 'amount', 0) for t in transfers),
+                    'total_distributed': amount_sums[account],
                     'risk_score': hub_score,
                 })
-        
+
         return sorted(detected_hubs, key=lambda x: x['risk_score'], reverse=True)
     
     def detect_velocity_anomalies(
@@ -565,14 +571,14 @@ class FraudPatternDetector:
         transfers: List[Dict],
         unique_targets: int,
         avg_amount: float,
+        total_amount: float = 0.0,
     ) -> float:
         """Score fan-out hub risk"""
         score = 0.0
         
         diversity_score = min(unique_targets / 30.0, 1.0)
         count_score = min(len(transfers) / 60.0, 1.0)
-        total = sum(self._txn_value(t, 'amount', 0) for t in transfers)
-        total_score = 0.2 if total > 1000000 else 0.0
+        total_score = 0.2 if total_amount > 1000000 else 0.0
 
         return ScoreCalculator.aggregate_scores(
             {

@@ -518,7 +518,7 @@ except (ImportError, SyntaxError) as e:
             # Check graph topology patterns
             G = state.transaction_graph
             
-            if source_account in G.nodes:
+            if source_account is not None and source_account in G:
                 # Analyze source account patterns
                 out_degree = G.out_degree(source_account)
                 in_degree = G.in_degree(source_account)
@@ -545,23 +545,26 @@ except (ImportError, SyntaxError) as e:
                 
                 # Check if part of a chain (linear path pattern) - LIMITED DEPTH FOR PERFORMANCE
                 try:
-                    neighbors = list(G.neighbors(source_account))
-                    if len(neighbors) >= 2:
+                    initial_successors = list(G.successors(source_account))
+                    if 1 <= len(initial_successors) <= 2:
                         # Check for sequential chain pattern (max 10 hops)
-                        chain_length = 0 #ready
+                        chain_length = 0
                         current = source_account
                         visited = set()
                         max_depth = 10  # Prevent long searches
-                        
-                        while current in G.nodes and current not in visited and chain_length < max_depth:
+
+                        while current not in visited and chain_length < max_depth:
                             visited.add(current)
                             successors = list(G.successors(current))
-                            if len(successors) == 1:
+                            if 1 <= len(successors) <= 2:
+                                next_node = successors[0]
+                                if next_node in visited:
+                                    break
                                 chain_length += 1
-                                current = successors[0]
+                                current = next_node
                             else:
                                 break
-                        
+
                         if chain_length >= 3:
                             graph_risk += 0.2
                             _api_logger.warning(
@@ -569,11 +572,15 @@ except (ImportError, SyntaxError) as e:
                                 event_type="graph_pattern",
                                 metadata={"pattern": "chain", "chain_length": chain_length},
                             )
-                except Exception as e:
-                    _api_logger.error(f"Error in graph pattern analysis: {e}")
-                    pass
-                except:
-                    print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length}-hop chain")
+                except Exception as exc:
+                    _api_logger.warning(
+                        f"Graph pattern analysis failed for {source_account}: {exc}",
+                        event_type="graph_pattern_analysis_error",
+                        metadata={
+                            "source_account": source_account,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
         
         graph_risk = min(graph_risk, 1.0)
         breakdown['graph'] = graph_risk
@@ -930,61 +937,104 @@ def _read_json_file(path: Path):
 
 async def _load_graph_runtime_data(startup_logger):
     try:
-        # === SECURE GRAPH LOADING ===
-        runtime_settings = state.settings
-        graph_candidates = [
-            runtime_settings.graph.graph_path
-            if runtime_settings.raw_environment.aegis_graph_path
-            else None,
-            runtime_settings.graph.graph_path,
-        ]
-        graph_path = next((path for path in graph_candidates if path and path.exists()), None)
-        
-        EXPECTED_GRAPH_SHA256 = runtime_settings.graph.graph_sha256
-        
-        if graph_path:
-            file_bytes = await asyncio.to_thread(_read_file_bytes, graph_path)
-            actual_hash = hashlib.sha256(file_bytes).hexdigest()
-            
-            if not EXPECTED_GRAPH_SHA256:
-                raise RuntimeError(
-                    "Critical Security Alert: AEGIS_GRAPH_SHA256 env var is unset. "
-                    "Halting boot to prevent loading an unverified graph artifact."
-                )
-            if actual_hash != EXPECTED_GRAPH_SHA256:
-                raise RuntimeError(
-                    f"Critical Security Alert: {graph_path} hash mismatch. Halting boot.\n"
-                    f"Expected: {EXPECTED_GRAPH_SHA256}\n"
-                    f"Actual:   {actual_hash}"
-                )
-            
-            if graph_path.suffix.lower() != ".graphml":
-                raise ValueError(
-                    f"Unsupported graph artifact format: {graph_path.suffix}. "
-                    "Only .graphml is accepted."
-                )
-            state.transaction_graph = nx.parse_graphml(file_bytes.decode("utf-8"))
-            startup_logger.info(
-                "Loaded transaction graph",
-                event_type="graph_loaded",
-                metadata={
-                    "path": str(graph_path),
-                    "nodes": state.transaction_graph.number_of_nodes(),
-                    "edges": state.transaction_graph.number_of_edges(),
-                },
+        # === NEO4J DATABASE INITIALIZATION ===
+        db_config = state.config.get("database", {})
+        neo4j_config = db_config.get("neo4j", {})
+        neo4j_enabled = neo4j_config.get("enabled", False)
+
+        env_uri = os.getenv("AEGIS_NEO4J_URI") or os.getenv("NEO4J_URI")
+        env_user = os.getenv("AEGIS_NEO4J_USER") or os.getenv("NEO4J_USER")
+        env_password = os.getenv("AEGIS_NEO4J_PASSWORD") or os.getenv("NEO4J_PASSWORD")
+        env_enabled = os.getenv("AEGIS_NEO4J_ENABLED")
+
+        if env_enabled is not None:
+            neo4j_enabled = env_enabled.lower() == "true"
+
+        if neo4j_enabled:
+            uri = env_uri or neo4j_config.get("uri", "bolt://localhost:7687")
+            user = env_user or neo4j_config.get("user", "neo4j")
+            password = env_password or neo4j_config.get("password", "password")
+
+            from ..core.providers.neo4j import Neo4jGraphProvider
+
+            provider = Neo4jGraphProvider(
+                uri=uri,
+                user=user,
+                password=password,
+                enabled=True,
             )
-            print(f"✓ Loaded verified transaction graph: {state.transaction_graph.number_of_nodes()} nodes, "
-                  f"{state.transaction_graph.number_of_edges()} edges")
-            state.graph_loaded = True
-        else:
-            startup_logger.warning(
-                "Graph file not found at data/synthetic/graph.graphml",
-                event_type="graph_missing",
-            )
-            print("⚠ Graph file not found at data/synthetic/graph.graphml")
-        
-        if not graph_path:
-            state.graph_loaded = False
+
+            if provider.is_active:
+                state.transaction_graph = provider
+                state.graph_loaded = True
+                startup_logger.info(
+                    "Initialized active Neo4j database connection pool",
+                    event_type="neo4j_initialized",
+                    metadata={"uri": uri, "user": user},
+                )
+                print(f"✓ Initialized active Neo4j database integration: {provider.number_of_nodes} nodes, {provider.number_of_edges} edges")
+            else:
+                startup_logger.warning(
+                    "Neo4j enabled but connection failed. Falling back to static graph files.",
+                    event_type="neo4j_fallback",
+                )
+
+        # === SECURE GRAPH LOADING (Fallback) ===
+        if not state.graph_loaded:
+            runtime_settings = state.settings
+            graph_candidates = [
+                runtime_settings.graph.graph_path
+                if runtime_settings.raw_environment.aegis_graph_path
+                else None,
+                runtime_settings.graph.graph_path,
+            ]
+            graph_path = next((path for path in graph_candidates if path and path.exists()), None)
+            
+            EXPECTED_GRAPH_SHA256 = runtime_settings.graph.graph_sha256
+            
+            if graph_path:
+                file_bytes = await asyncio.to_thread(_read_file_bytes, graph_path)
+                actual_hash = hashlib.sha256(file_bytes).hexdigest()
+                
+                if not EXPECTED_GRAPH_SHA256:
+                    raise RuntimeError(
+                        "Critical Security Alert: AEGIS_GRAPH_SHA256 env var is unset. "
+                        "Halting boot to prevent loading an unverified graph artifact."
+                    )
+                if actual_hash != EXPECTED_GRAPH_SHA256:
+                    raise RuntimeError(
+                        f"Critical Security Alert: {graph_path} hash mismatch. Halting boot.\n"
+                        f"Expected: {EXPECTED_GRAPH_SHA256}\n"
+                        f"Actual:   {actual_hash}"
+                    )
+                
+                if graph_path.suffix.lower() != ".graphml":
+                    raise ValueError(
+                        f"Unsupported graph artifact format: {graph_path.suffix}. "
+                        "Only .graphml is accepted."
+                    )
+                state.transaction_graph = nx.parse_graphml(file_bytes.decode("utf-8"))
+                startup_logger.info(
+                    "Loaded transaction graph",
+                    event_type="graph_loaded",
+                    metadata={
+                        "path": str(graph_path),
+                        "nodes": state.transaction_graph.number_of_nodes(),
+                        "edges": state.transaction_graph.number_of_edges(),
+                    },
+                )
+                print(f"✓ Loaded verified transaction graph: {state.transaction_graph.number_of_nodes()} nodes, "
+                      f"{state.transaction_graph.number_of_edges()} edges")
+                state.graph_loaded = True
+            else:
+                startup_logger.warning(
+                    "Graph file not found at data/synthetic/graph.graphml",
+                    event_type="graph_missing",
+                )
+                print("⚠ Graph file not found at data/synthetic/graph.graphml")
+            
+            if not graph_path:
+                state.graph_loaded = False
 
         # Load fraud chains
         chains_path = Path("data/synthetic/fraud_chains.json")
@@ -1257,6 +1307,10 @@ async def lifespan(app: FastAPI):
     Application lifespan. Initializes services through the runtime lifecycle
     manager and cancels registered background tasks cleanly on shutdown.
     """
+    def _close_neo4j_provider():
+        if hasattr(state.transaction_graph, "close") and callable(state.transaction_graph.close):
+            state.transaction_graph.close()
+
     startup_logger = get_logger("api.startup")
     lifecycle_manager = LifecycleManager(state.runtime, logger=startup_logger)
     state.services.register_service("lifecycle_manager", lifecycle_manager, replace=True)
@@ -1292,6 +1346,7 @@ async def lifespan(app: FastAPI):
         critical=False,
     )
     lifecycle_manager.register_shutdown("stop_background_tasks", _stop_runtime_background_tasks)
+    lifecycle_manager.register_shutdown("close_neo4j_provider", _close_neo4j_provider)
 
     await lifecycle_manager.startup()
     try:

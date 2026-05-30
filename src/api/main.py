@@ -1193,7 +1193,8 @@ async def _load_graph_runtime_data(startup_logger):
 
             from ..core.providers.neo4j import Neo4jGraphProvider
 
-            provider = Neo4jGraphProvider(
+            provider = await asyncio.to_thread(
+                Neo4jGraphProvider,
                 uri=uri,
                 user=user,
                 password=password,

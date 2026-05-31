@@ -998,12 +998,6 @@ except (ImportError, SyntaxError) as e:
             'recommended_action': action
         }
 
-    _DEFERRED_FALLBACK_MODEL_COMPONENTS = (
-        _compute_risk_score_fallback,
-        _generate_explanation_fallback,
-    )
-
-
 # Global state
 class AppState:
     """Application state"""
@@ -1092,17 +1086,11 @@ state = AppState()
 
 
 def _initialize_model_components() -> None:
-    """Resolve model functions only after the runtime state exists."""
-    global compute_risk_score, generate_explanation, MODEL_AVAILABLE
-
-    if "state" not in globals() or not isinstance(state, AppState):
-        raise RuntimeError("Model components cannot initialize before application state")
-
-    compute_risk_score, generate_explanation, MODEL_AVAILABLE = _resolve_model_components()
-
-    if _DEFERRED_FALLBACK_MODEL_COMPONENTS is not None:
-        compute_risk_score, generate_explanation = _DEFERRED_FALLBACK_MODEL_COMPONENTS
-        MODEL_AVAILABLE = False
+    """Model components are resolved lazily on first use via
+    compute_risk_score() and generate_explanation() wrappers.
+    MODEL_AVAILABLE is set at module level via importlib find_spec.
+    This function is kept for compatibility but is now a no-op."""
+    pass
 
 
 _initialize_model_components()

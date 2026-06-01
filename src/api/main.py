@@ -2209,6 +2209,7 @@ if settings.runtime.debug:
         tags=["Debug"],
         summary="Force honeypot activation (DEBUG mode only)",
         description="Available only when DEBUG env var is 'true'. For testing only.",
+        dependencies=[Depends(require_api_key)],
     )
     def debug_activate_honeypot(request: HoneypotDebugRequest, x_honeypot_admin_token: Optional[str] = Header(None, alias="X-Honeypot-Admin-Token")):
         # Ensure this endpoint is only available in DEBUG mode at runtime

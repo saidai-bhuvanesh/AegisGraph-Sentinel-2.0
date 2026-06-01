@@ -10,7 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Dict, Tuple
 from .htgat import HTGAT
+from .graphsage import GraphSAGE
+from .tgat import TGAT
+from .tgn import TGN
 from .temporal_encoding import TemporalEncoding, TemporalDecay
+from .temporal_anomaly import TemporalAnomalyDetector
 
 
 class FraudDetectionModel(nn.Module):
@@ -48,6 +52,7 @@ class FraudDetectionModel(nn.Module):
         dropout: float = 0.3,
         temporal_dim: int = 16,
         pooling: str = 'attention',
+        model_type: str = 'HTGAT',
     ):
         super().__init__()
         
@@ -55,22 +60,63 @@ class FraudDetectionModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.pooling = pooling
+        self.model_type = model_type.upper()
         
         # Temporal encoding
         self.temporal_encoder = TemporalEncoding(temporal_dim)
+        self.anomaly_detector = TemporalAnomalyDetector()
         
-        # HTGAT backbone
-        self.htgat = HTGAT(
-            in_channels=node_feature_dim,
-            hidden_channels=hidden_dim,
-            out_channels=output_dim,
-            num_node_types=num_node_types,
-            num_edge_types=num_edge_types,
-            num_layers=num_layers,
-            heads=heads,
-            dropout=dropout,
-            edge_dim=temporal_dim,
-        )
+        # Backbone GNN Selection
+        if self.model_type == 'HTGAT':
+            self.backbone = HTGAT(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                heads=heads,
+                dropout=dropout,
+                edge_dim=temporal_dim,
+            )
+        elif self.model_type == 'GRAPHSAGE':
+            self.backbone = GraphSAGE(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                dropout=dropout,
+            )
+        elif self.model_type == 'TGAT':
+            self.backbone = TGAT(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                heads=heads,
+                dropout=dropout,
+                temporal_dim=temporal_dim,
+            )
+        elif self.model_type == 'TGN':
+            self.backbone = TGN(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                memory_dim=hidden_dim,
+                temporal_dim=temporal_dim,
+                dropout=dropout,
+            )
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+            
+        # Backward compatibility alias
+        self.htgat = self.backbone
         
         # Graph-level pooling
         if pooling == 'attention':
@@ -139,39 +185,47 @@ class FraudDetectionModel(nn.Module):
             edge_attr = data.get("edge_attr", edge_attr)
             edge_timestamp = data.get("edge_timestamp", edge_timestamp)
             batch = data.get("batch", batch)
+        
+        if node_type is None:
+            node_type = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         if edge_attr is None:
             if edge_timestamp is None:
                 raise ValueError("FraudDetectionModel.forward requires edge_attr or edge_timestamp")
             edge_attr = self.temporal_encoder(edge_timestamp)
         
-        # Apply HTGAT
-        node_embeddings = self.htgat(
-            x=x,
-            edge_index=edge_index,
-            node_type=node_type,
-            edge_type=edge_type,
-            edge_attr=edge_attr,
-        )
-        
-        # Graph-level pooling
-        if batch is None:
-            # Single graph - pool all nodes
-            graph_embedding = self._pool_nodes(node_embeddings)
+        # Apply Backbone GNN
+        if self.model_type in ('TGAT', 'TGN'):
+            node_embeddings = self.backbone(
+                x=x,
+                edge_index=edge_index,
+                node_type=node_type,
+                edge_type=edge_type,
+                edge_attr=edge_attr,
+                edge_timestamp=edge_timestamp,
+            )
         else:
-            # Multiple graphs - pool per graph
-            num_graphs = batch.max().item() + 1
-            graph_embedding = torch.stack([
-                self._pool_nodes(node_embeddings[batch == i])
-                for i in range(num_graphs)
-            ])
+            node_embeddings = self.backbone(
+                x=x,
+                edge_index=edge_index,
+                node_type=node_type,
+                edge_type=edge_type,
+                edge_attr=edge_attr,
+            )
         
-        # Predict risk
-        risk = self.risk_head(graph_embedding).squeeze(-1)
-        
+        # Use per‑node embeddings as graph representation (2‑D tensor)
+        graph_embedding = node_embeddings
+
+        # Predict risk based on the aggregated graph embedding (we take mean across nodes)
+        risk = self.risk_head(graph_embedding.mean(dim=0)).squeeze(-1)
+
+        # Anomaly detection on node embeddings
+        anomaly_mask = self.anomaly_detector(node_embeddings)
+
         result = {
             'risk': risk,
             'graph_embedding': graph_embedding,
+            'anomaly_mask': anomaly_mask,
         }
         
         if return_embedding:
@@ -231,22 +285,63 @@ class MultiTaskFraudModel(nn.Module):
         temporal_dim: int = 16,
         num_fraud_types: int = 3,
         predict_node_risk: bool = True,
+        model_type: str = 'HTGAT',
     ):
         super().__init__()
         
-        # Shared HTGAT backbone
+        self.model_type = model_type.upper()
         self.temporal_encoder = TemporalEncoding(temporal_dim)
-        self.htgat = HTGAT(
-            in_channels=node_feature_dim,
-            hidden_channels=hidden_dim,
-            out_channels=output_dim,
-            num_node_types=num_node_types,
-            num_edge_types=num_edge_types,
-            num_layers=num_layers,
-            heads=heads,
-            dropout=dropout,
-            edge_dim=temporal_dim,
-        )
+        
+        # Backbone GNN Selection
+        if self.model_type == 'HTGAT':
+            self.backbone = HTGAT(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                heads=heads,
+                dropout=dropout,
+                edge_dim=temporal_dim,
+            )
+        elif self.model_type == 'GRAPHSAGE':
+            self.backbone = GraphSAGE(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                dropout=dropout,
+            )
+        elif self.model_type == 'TGAT':
+            self.backbone = TGAT(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                num_layers=num_layers,
+                heads=heads,
+                dropout=dropout,
+                temporal_dim=temporal_dim,
+            )
+        elif self.model_type == 'TGN':
+            self.backbone = TGN(
+                in_channels=node_feature_dim,
+                hidden_channels=hidden_dim,
+                out_channels=output_dim,
+                num_node_types=num_node_types,
+                num_edge_types=num_edge_types,
+                memory_dim=hidden_dim,
+                temporal_dim=temporal_dim,
+                dropout=dropout,
+            )
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+            
+        self.htgat = self.backbone
         
         # Graph-level pooling
         self.pool_attention = nn.Sequential(
@@ -317,14 +412,24 @@ class MultiTaskFraudModel(nn.Module):
         # Encode temporal information
         edge_attr = self.temporal_encoder(edge_timestamp)
         
-        # Apply HTGAT
-        node_embeddings = self.htgat(
-            x=x,
-            edge_index=edge_index,
-            node_type=node_type,
-            edge_type=edge_type,
-            edge_attr=edge_attr,
-        )
+        # Apply Backbone GNN
+        if self.model_type in ('TGAT', 'TGN'):
+            node_embeddings = self.backbone(
+                x=x,
+                edge_index=edge_index,
+                node_type=node_type,
+                edge_type=edge_type,
+                edge_attr=edge_attr,
+                edge_timestamp=edge_timestamp,
+            )
+        else:
+            node_embeddings = self.backbone(
+                x=x,
+                edge_index=edge_index,
+                node_type=node_type,
+                edge_type=edge_type,
+                edge_attr=edge_attr,
+            )
         
         # Graph-level pooling
         attention_scores = self.pool_attention(node_embeddings)

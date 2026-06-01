@@ -64,6 +64,8 @@ def load_environment(environ: Optional[Mapping[str, str]] = None) -> Environment
     load_dotenv()
     source = os.environ if environ is None else environ
     values = {field: source.get(env_name) for field, env_name in ENV_ALIASES.items()}
+    if not values.get("aegis_allowed_origins"):
+        values["aegis_allowed_origins"] = source.get("ALLOWED_ORIGINS")
     return EnvironmentVariablesSchema(**values)
 
 

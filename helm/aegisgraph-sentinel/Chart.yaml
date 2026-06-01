@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aegisgraph-sentinel
+description: A Helm chart for deploying AegisGraph Sentinel 2.0 on Kubernetes.
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+dependencies:
+  - name: redis
+    version: "18.6.1"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+  - name: neo4j
+    version: "5.15.0"
+    repository: "https://helm.neo4j.com/neo4j"
+    condition: neo4j.enabled

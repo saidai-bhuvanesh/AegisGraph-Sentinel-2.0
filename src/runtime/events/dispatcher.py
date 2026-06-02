@@ -43,6 +43,8 @@ class EventDispatcher:
         if self._started:
             return
         self._started = True
+        self._queue = asyncio.Queue(maxsize=self._maxsize)
+        self._stop_requested = asyncio.Event()
         self._stop_requested.clear()
         self._task = asyncio.create_task(self._process_loop())
 
@@ -77,7 +79,7 @@ class EventDispatcher:
                 logger.exception("Event dispatch failed for %s", type(event).__name__)
             self._drain_overflow()
 
-            while self._overflow and not self._queue.full():
+    async def _fetch_next_event(self) -> Optional[RuntimeEvent]:
         try:
             return await asyncio.wait_for(self._queue.get(), timeout=0.2)
         except asyncio.TimeoutError:

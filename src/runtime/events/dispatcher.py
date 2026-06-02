@@ -67,19 +67,32 @@ class EventDispatcher:
             await self._task
 
     async def _process_loop(self) -> None:
-        while not self._stop_requested.is_set() or not self._queue.empty() or self._overflow:
+        while (
+            not self._stop_requested.is_set()
+            or not self._queue.empty()
+            or self._overflow
+        ):
             event = await self._fetch_next_event()
             if event is None:
                 continue
+
             try:
                 await self._bus.publish(event)
             except Exception:
-                logger.exception("Event dispatch failed for %s", type(event).__name__)
+                logger.exception(
+                    "Event dispatch failed for %s",
+                    type(event).__name__,
+                )
+
             self._drain_overflow()
 
-            while self._overflow and not self._queue.full():
+    async def _fetch_next_event(self) -> Optional[RuntimeEvent]:
+        """Fetch the next queued event with timeout support."""
         try:
-            return await asyncio.wait_for(self._queue.get(), timeout=0.2)
+            return await asyncio.wait_for(
+                self._queue.get(),
+                timeout=0.2,
+            )
         except asyncio.TimeoutError:
             return None
 

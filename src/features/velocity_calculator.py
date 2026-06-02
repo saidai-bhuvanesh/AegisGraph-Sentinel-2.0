@@ -143,7 +143,6 @@ class VelocityCalculator:
             
             total_distance += distance
         
-        if total_time == 0:
         total_time = transactions[-1].timestamp - transactions[0].timestamp
         
         if total_time <= 0:

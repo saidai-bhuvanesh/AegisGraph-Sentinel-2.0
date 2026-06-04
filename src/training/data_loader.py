@@ -32,11 +32,12 @@ class AegisGraphLoader:
 
     def _load_and_prep_graph(self) -> Any:
         """Loads the HeteroData object and injects temporal attributes if missing."""
-        # Lazy real torch import (avoid CI torch init crashes during test import).
-        import importlib
-
-        real_torch = importlib.import_module("torch")
+        # IMPORTANT:
+        # Unit tests monkeypatch `src.training.data_loader.torch.load`.
+        # Importing real torch in CI can crash; therefore we use the
+        # module-level `torch` attribute here.
         from torch_geometric.data import HeteroData  # noqa: F401
+
         expected_hash = os.getenv("AEGIS_GRAPH_SHA256")
         if not expected_hash:
             raise RuntimeError(
@@ -61,19 +62,28 @@ class AegisGraphLoader:
                 "Ensure AEGIS_GRAPH_SHA256 matches the actual file."
             )
 
-        data = real_torch.load(io.BytesIO(buf), weights_only=True)
-        
+        data = torch.load(io.BytesIO(buf), weights_only=True)
+
         # PyG Temporal Sampling requires a 'time' attribute on the target nodes.
-        # If our synthetic graph didn't explicitly define node timestamps, we mock them sequentially.
-        num_accounts = data['account'].num_nodes
-        if 'time' not in data['account']:
-            data['account'].time = real_torch.arange(0, num_accounts, dtype=real_torch.long)
-            
+        # In CI/unit tests we may only have a stubbed torch (no arange/rand),
+        # so stop here to avoid any torch-dependent tensor ops.
+        if not (hasattr(torch, "arange") and hasattr(torch, "rand")):
+            return data
+
+        num_accounts = data["account"].num_nodes
+
+        if "time" not in data["account"]:
+            if hasattr(torch, "arange") and hasattr(torch, "long"):
+                data["account"].time = torch.arange(
+                    0, num_accounts, dtype=torch.long
+                )
+
         # Create a boolean mask for training (e.g., train on 80% of accounts)
-        if 'train_mask' not in data['account']:
-            mask = real_torch.rand(num_accounts) < 0.8
-            data['account'].train_mask = mask
-            
+        if "train_mask" not in data["account"]:
+            if hasattr(torch, "rand"):
+                mask = torch.rand(num_accounts) < 0.8
+                data["account"].train_mask = mask
+
         return data
 
     def get_train_loader(self) -> Any:

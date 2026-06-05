@@ -67,21 +67,20 @@ class LifecycleManager:
                 try:
                     await self._run_step(step, phase="startup")
                     completed_steps.append(step.name)
-                except Exception as exc:
-                    self._logger.error(
-                        f"Startup failed at step '{step.name}': {exc}",
-                        event_type="runtime_startup_failed",
-                        metadata={"failed_step": step.name, "completed_steps": completed_steps},
-                    )
-                    await self._rollback_startup(completed_steps)
-                    raise
-
+            except Exception as exc:
+                self._logger.error(
+                    f"Startup failed at step '{step.name}': {exc}",
+                    event_type="runtime_startup_failed",
+                    metadata={"failed_step": step.name, "completed_steps": completed_steps},
+                )
+                await self._rollback_startup(completed_steps)
+                raise
             self._started = True
             self.runtime_state.started = True
             self.runtime_state.record_lifecycle_event("startup_complete", steps=len(self._startup_steps))
             self._logger.info("Runtime startup complete", event_type="runtime_startup_complete")
 
-            # Emit RuntimeStartedEvent after all steps succeed
+            # Emit RuntimeStartedEvent after all steps succeed.
             if dispatcher is not None and dispatcher.started:
                 dispatcher.dispatch(
                     RuntimeStartedEvent(
@@ -89,6 +88,7 @@ class LifecycleManager:
                         payload={"steps": len(self._startup_steps)},
                     )
                 )
+
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -114,7 +114,9 @@ class LifecycleManager:
 
             # Emit RuntimeShutdownEvent then stop the dispatcher so it
             # drains any remaining queued events before exiting.
-            if dispatcher is not None and dispatcher.started:
+            if dispatcher is not None:
+                if not dispatcher.started:
+                    await dispatcher.start()
                 dispatcher.dispatch(
                     RuntimeShutdownEvent(
                         source="lifecycle_manager",
@@ -122,6 +124,7 @@ class LifecycleManager:
                     )
                 )
                 await dispatcher.stop()
+
 
     async def _rollback_startup(self, completed_steps: List[str]) -> None:
         """Tear down steps that already ran after a startup failure."""

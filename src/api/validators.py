@@ -10,7 +10,7 @@ Comprehensive validation for:
 - Biometric data (array constraints, value ranges)
 - Rate limiting (per account, API key, IP)
 """
-
+from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Any
@@ -458,7 +458,7 @@ def get_rate_limiter() -> RateLimiter:
 
 def reset_rate_limiter():
     """Reset the global rate limiter (for testing)."""
-    global _rate_limiter
+   
     if _rate_limiter is not None:
         _rate_limiter.reset()
 

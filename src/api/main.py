@@ -20,6 +20,7 @@ from enum import Enum
 from functools import partial
 from pathlib import Path
 from itertools import islice
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 import networkx as nx
@@ -1203,10 +1204,17 @@ def _run_scoring_pipeline(
     target_account: str,
     lateral_detector,
     innovations_available: bool,
+    subgraph_cache: Optional[dict] = None,
+    subgraph_cache_lock=None,
 ) -> dict:
     """
     Pure synchronous scoring work safe to run in a thread pool executor.
     Returns the final risk_result dict.
+
+    subgraph_cache and subgraph_cache_lock are optional. When provided
+    (typically by the batch endpoint), subgraph extractions for the same
+    source account are shared across concurrent scorer calls, reducing
+    redundant graph traversals from O(N) to O(unique source accounts).
     """
     risk_result = compute_risk_score(
         transaction=transaction,
@@ -1218,6 +1226,8 @@ def _run_scoring_pipeline(
         centrality_window_size=state.centrality_window_size,
         account_profiles=state.account_profiles,
         config=state.config,
+        subgraph_cache=subgraph_cache,
+        subgraph_cache_lock=subgraph_cache_lock,
     )
 
     if lateral_detector is not None:
@@ -1540,6 +1550,8 @@ async def check_transaction(
     lateral_movement_detector=Depends(get_lateral_movement_detector),
     honeypot_manager=Depends(get_honeypot_manager),
     blockchain_manager=Depends(get_blockchain_manager),
+    _subgraph_cache: Optional[Dict] = None,
+    _subgraph_cache_lock: Optional[Lock] = None,
 ):
     """
     Check a single transaction for fraud
@@ -1595,7 +1607,11 @@ async def check_transaction(
                         event_type="keystroke_analysis_error",
                     )
         
-        # Offload CPU-bound scoring + graph analysis to thread pool
+        # Offload CPU-bound scoring + graph analysis to thread pool.
+        # _subgraph_cache and _subgraph_cache_lock are populated by the
+        # batch endpoint so that subgraph extractions for the same source
+        # account are shared across concurrent tasks within the same batch,
+        # reducing graph traversals from O(N) to O(unique source accounts).
         loop = asyncio.get_running_loop()
         risk_result = await loop.run_in_executor(
             None,
@@ -1607,6 +1623,8 @@ async def check_transaction(
                 request.target_account,
                 lateral_movement_detector if LATERAL_MOVEMENT_AVAILABLE else None,
                 INNOVATIONS_AVAILABLE,
+                _subgraph_cache,
+                _subgraph_cache_lock,
             ),
         )
 
@@ -2069,18 +2087,34 @@ async def fraud_stream_websocket(websocket: WebSocket, client_id: str):
 async def check_batch_transactions(request: BatchTransactionRequest):
     """
     Check multiple transactions in batch
-    
+
     Processes multiple transactions and returns results for each.
     Maximum batch size: 100 transactions.
+
+    Performance note: a shared subgraph cache (dict + Lock) is created
+    once per batch and threaded through to every check_transaction()
+    call. When the same source account appears in multiple transactions,
+    the graph neighbourhood is extracted only once. This reduces
+    get_approx_subgraph() calls from O(N) to O(unique source accounts),
+    cutting batch latency significantly for real-world fraud workloads
+    where a mule account may appear dozens of times per batch.
     """
     start_time = time.time()
     max_concurrent_tasks = 8
     semaphore = asyncio.Semaphore(max_concurrent_tasks)
     txns = request.transactions
 
+    # Per-batch subgraph cache shared across all concurrent scorer calls.
+    batch_subgraph_cache: Dict = {}
+    batch_subgraph_lock: Lock = Lock()
+
     async def _process_transaction(txn_request):
         async with semaphore:
-            return await check_transaction(txn_request)
+            return await check_transaction(
+                txn_request,
+                _subgraph_cache=batch_subgraph_cache,
+                _subgraph_cache_lock=batch_subgraph_lock,
+            )
 
     async def _stream_batch_response():
         api_to_internal = {

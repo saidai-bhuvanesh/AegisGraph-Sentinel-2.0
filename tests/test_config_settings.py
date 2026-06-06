@@ -195,3 +195,23 @@ def test_production_validation_accepts_required_env(tmp_path):
     assert report.ok
     assert report.warnings == []
     assert settings.to_runtime_dict()["api"]["api_url"] == "https://api.example.test"
+
+import pytest
+from pydantic import ValidationError
+
+from src.config.schemas import GraphRuntimeSettings
+
+
+def test_k_hop_neighbors_accepts_positive_integer():
+    settings = GraphRuntimeSettings(k_hop_neighbors=3)
+    assert settings.k_hop_neighbors == 3
+
+
+def test_k_hop_neighbors_rejects_zero():
+    with pytest.raises(ValidationError):
+        GraphRuntimeSettings(k_hop_neighbors=0)
+
+
+def test_k_hop_neighbors_rejects_negative_value():
+    with pytest.raises(ValidationError):
+        GraphRuntimeSettings(k_hop_neighbors=-5)

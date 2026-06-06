@@ -11,7 +11,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
+from contextvars import ContextVar
 from importlib import import_module, util as importlib_util
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -19,14 +21,15 @@ from enum import Enum
 from functools import partial
 from pathlib import Path
 from itertools import islice
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 import networkx as nx
 import numpy as np
 import uvicorn
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from .websocket_manager import WebSocketManager
 
 ws_manager = WebSocketManager()
@@ -90,7 +93,10 @@ except ImportError as e:
     async def _rate_limit_exceeded_handler(request, exc):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    print(f"SlowAPI not available ({e}); rate limiting disabled")
+    import logging as _stdlib_logging
+    _stdlib_logging.getLogger(__name__).warning(
+        "SlowAPI not available (%s); rate limiting disabled", e
+    )
 
 
 
@@ -107,6 +113,7 @@ from ..exceptions import (
 from ..observability import get_audit_logger, get_logger
 from ..runtime import LifecycleManager, RuntimeState, RecoveryManager, RuntimeWatchdog
 from ..runtime.background_tasks import honeypot_auto_release_loop
+from ..security import sanitize_payload
 from .schemas import (
     AccountOpeningRequest,
     AccountOpeningResponse,
@@ -133,6 +140,8 @@ from .schemas import (
     VoiceAnalysisRequest,
     VoiceAnalysisResponse,
     HoneypotStatus,
+    AlertSummaryRequest,
+    AlertSummaryResponse,
 )
 from .security import require_api_key, Role, require_role
 from .validators import StrictRateLimit
@@ -179,19 +188,45 @@ def _extract_legal_export_token(
 
 
 def _parse_request_timestamp(raw_timestamp: Optional[str]) -> Optional[datetime]:
+    """Parse a request timestamp from a string.
+
+    Accepts either a Unix epoch integer (seconds) or an ISO 8601 / RFC 3339
+    string.  Returns ``None`` for any value that cannot be parsed or that
+    falls outside the accepted epoch range, which prevents ``OSError`` /
+    ``OverflowError`` crashes on extreme platform-specific boundary values
+    (confirmed on macOS/Linux where ``datetime.fromtimestamp`` raises
+    ``OSError`` for values beyond the platform ``time_t`` range instead of
+    ``ValueError``).
+
+    Negative timestamps and pre-2001 epochs are explicitly rejected because
+    no legitimate request to this system can originate before the service
+    existed.
+    """
     if not raw_timestamp:
         return None
 
+    # Epoch seconds — only non-negative integers within a sensible range.
+    # Lower bound: 2001-09-09 (epoch 1_000_000_000) — no valid request
+    #              can originate before this service was conceived.
+    # Upper bound: 2100-01-01 (epoch 4_102_444_800) — rejects far-future
+    #              values that cause ValueError or OverflowError on some
+    #              platforms without relying on exception handling alone.
+    _MIN_VALID_EPOCH: int = 1_000_000_000   # 2001-09-09
+    _MAX_VALID_EPOCH: int = 4_102_444_800   # 2100-01-01
+
     candidate = raw_timestamp.strip()
     try:
-        if candidate.isdigit() or (candidate.startswith("-") and candidate[1:].isdigit()):
-            return datetime.fromtimestamp(int(candidate), tz=timezone.utc)
+        if candidate.isdigit():
+            ts_int = int(candidate)
+            if not (_MIN_VALID_EPOCH <= ts_int <= _MAX_VALID_EPOCH):
+                return None
+            return datetime.fromtimestamp(ts_int, tz=timezone.utc)
 
         parsed_timestamp = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
         if parsed_timestamp.tzinfo is None:
             parsed_timestamp = parsed_timestamp.replace(tzinfo=timezone.utc)
         return parsed_timestamp.astimezone(timezone.utc)
-    except ValueError:
+    except (ValueError, OSError, OverflowError):
         return None
 
 
@@ -243,19 +278,21 @@ def _build_health_response(include_details: bool) -> dict[str, Any]:
         "service": "AegisGraph Sentinel",
     }
 
-    if not include_details:
-        return response
-
     start_time = getattr(runtime_state, "start_time", None)
     uptime = time.time() - start_time if isinstance(start_time, (int, float)) else 0.0
+
+    response["version"] = "2.0.0"
+    response["uptime_seconds"] = uptime
+
+    if not include_details:
+        return sanitize_payload(response)
+
     response.update(
         {
-            "version": "2.0.0",
             "model_loaded": getattr(runtime_state, "model_loaded", False),
             "graph_loaded": getattr(runtime_state, "graph_loaded", False),
             "innovations_available": INNOVATIONS_AVAILABLE,
             "requests_processed": getattr(runtime_state, "requests_processed", 0),
-            "uptime_seconds": uptime,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
     )
@@ -273,7 +310,7 @@ def _build_health_response(include_details: bool) -> dict[str, Any]:
             for name, sh in snapshot.items()
         }
 
-    return response
+    return sanitize_payload(response)
 from ..exceptions import register_exception_handlers, register_observability_middleware
 from ..observability import get_audit_logger, get_logger
 from ..core import register_core_services, register_graph_services, register_innovation_services
@@ -281,6 +318,21 @@ from ..core import register_core_services, register_graph_services, register_inn
 _api_logger = get_logger("api")
 _audit_logger = get_audit_logger()
 settings = get_settings()
+
+# Allowlist pattern for WebSocket client_id path parameter.
+# Only alphanumeric characters, hyphens, and underscores are permitted,
+# with a maximum length of 64 characters, to prevent log injection and
+# memory exhaustion via crafted path values.
+_WS_CLIENT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+# Context variables for batch-scoped subgraph cache (shared across concurrent scorers)
+# Type annotations use Any to avoid Pydantic/FastAPI trying to validate Lock type
+_batch_subgraph_cache: ContextVar[Any] = ContextVar(
+    '_batch_subgraph_cache', default=None
+)
+_batch_subgraph_lock: ContextVar[Any] = ContextVar(
+    '_batch_subgraph_lock', default=None
+)
 
 
 class FraudDecision(str, Enum):
@@ -324,10 +376,10 @@ def _chunked(items, chunk_size):
 def _fallback_compute_risk_score(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
     """Enhanced risk scorer with graph-based mule account detection."""
     runtime_state = state
-    graph_loaded = getattr(runtime_state, "graph_loaded", False)
-    transaction_graph = getattr(runtime_state, "transaction_graph", None)
-    mule_accounts = getattr(runtime_state, "mule_accounts", set()) or set()
-    account_profiles = getattr(runtime_state, "account_profiles", {}) or {}
+    graph_loaded = kwargs.get("graph_loaded", getattr(runtime_state, "graph_loaded", False))
+    transaction_graph = kwargs.get("transaction_graph", getattr(runtime_state, "transaction_graph", None))
+    mule_accounts = kwargs.get("mule_accounts", getattr(runtime_state, "mule_accounts", set())) or set()
+    account_profiles = kwargs.get("account_profiles", getattr(runtime_state, "account_profiles", {})) or {}
 
     risk_score = 0.0
     breakdown = {
@@ -343,7 +395,7 @@ def _fallback_compute_risk_score(transaction: dict, biometrics: dict = None, **k
 
     graph_risk = 0.0
 
-    if graph_loaded and transaction_graph:
+    if graph_loaded and transaction_graph is not None:
         if source_account in mule_accounts:
             graph_risk += 0.6
             _api_logger.warning(
@@ -655,6 +707,12 @@ def _resolve_model_components() -> tuple[Any, Any, bool]:
 
 def compute_risk_score(*args, **kwargs):
     global _compute_risk_score_impl, _generate_explanation_impl
+    if (
+        "transaction_graph" not in kwargs
+        and getattr(state, "graph_loaded", False)
+        and getattr(state, "transaction_graph", None) is not None
+    ):
+        return _fallback_compute_risk_score(*args, **kwargs)
     if _compute_risk_score_impl is None:
         _compute_risk_score_impl, _generate_explanation_impl, _ = _resolve_model_components()
     return _compute_risk_score_impl(*args, **kwargs)
@@ -677,6 +735,9 @@ def _is_module_available(module_name: str) -> bool:
 MODEL_AVAILABLE = (
     _is_module_available("src.inference.risk_scorer")
     and _is_module_available("src.inference.explainer")
+    and _is_module_available("src.features.velocity_calculator")
+    and _is_module_available("src.features.behavioral_biometrics")
+    and _is_module_available("src.features.entropy_calculator")
     and _is_module_available("torch_geometric")
 )
 
@@ -709,6 +770,23 @@ except (ImportError, SyntaxError) as e:
 
 _compute_risk_score_fallback = _fallback_compute_risk_score
 _generate_explanation_fallback = _fallback_generate_explanation
+
+# ---------------------------------------------------------------------------
+# Fallback scoring configuration — loaded from config/thresholds.yaml so that
+# thresholds can be tuned without a code change or redeployment.
+# Used only when MODEL_AVAILABLE is False and the heuristic pipeline returns a
+# score at or below fallback_trigger_score.
+# ---------------------------------------------------------------------------
+def _load_fallback_scoring_config() -> dict:
+    """Return the fallback_scoring section from thresholds.yaml with safe defaults."""
+    try:
+        from ..utils.helpers import load_thresholds
+        thresholds = load_thresholds("config/thresholds.yaml")
+        return thresholds.get("fallback_scoring", {})
+    except Exception:
+        return {}
+
+_FALLBACK_SCORING = _load_fallback_scoring_config()
 
 # Global state
 class AppState:
@@ -826,10 +904,11 @@ async def _honeypot_auto_release_loop(interval_seconds: int = 60):
 
 
 
-def _startup_banner():
-    print("=" * 80)
-    print("AegisGraph Sentinel 2.0 - Starting up...")
-    print("=" * 80)
+def _startup_banner(startup_logger):
+    startup_logger.info(
+        "AegisGraph Sentinel 2.0 - Starting up...",
+        event_type="startup_banner",
+    )
 
 
 def _validate_runtime_environment(startup_logger):
@@ -916,7 +995,14 @@ async def _load_graph_runtime_data(startup_logger):
                     event_type="neo4j_initialized",
                     metadata={"uri": uri, "user": user},
                 )
-                print(f"✓ Initialized active Neo4j database integration: {provider.number_of_nodes} nodes, {provider.number_of_edges} edges")
+                startup_logger.info(
+                    "Neo4j database integration active",
+                    event_type="neo4j_active",
+                    metadata={
+                        "nodes": provider.number_of_nodes,
+                        "edges": provider.number_of_edges,
+                    },
+                )
             else:
                 startup_logger.warning(
                     "Neo4j enabled but connection failed. Falling back to static graph files.",
@@ -966,15 +1052,25 @@ async def _load_graph_runtime_data(startup_logger):
                         "edges": state.transaction_graph.number_of_edges(),
                     },
                 )
-                print(f"✓ Loaded verified transaction graph: {state.transaction_graph.number_of_nodes()} nodes, "
-                      f"{state.transaction_graph.number_of_edges()} edges")
+                startup_logger.info(
+                    "Transaction graph loaded successfully",
+                    event_type="graph_loaded",
+                    metadata={
+                        "nodes": state.transaction_graph.number_of_nodes(),
+                        "edges": state.transaction_graph.number_of_edges(),
+                    },
+                )
                 state.graph_loaded = True
             else:
                 startup_logger.warning(
                     "Graph file not found at data/synthetic/graph.graphml",
                     event_type="graph_missing",
                 )
-                print("⚠ Graph file not found at data/synthetic/graph.graphml")
+                startup_logger.warning(
+                    "Graph file not found; graph-based detection disabled",
+                    event_type="graph_file_missing",
+                    metadata={"expected_path": "data/synthetic/graph.graphml"},
+                )
             
             if not graph_path:
                 state.graph_loaded = False
@@ -1086,13 +1182,15 @@ def _startup_ready(startup_logger):
         },
     )
     
-    print("=" * 80)
-    print("AegisGraph Sentinel 2.0 is ready")
-    print(f"Mode: {'PRODUCTION' if MODEL_AVAILABLE else 'DEMO'}")
-    print(f"Graph-based Detection: {'ENABLED' if state.graph_loaded else 'DISABLED'}")
-    print(f"Innovations: {'ENABLED' if INNOVATIONS_AVAILABLE else 'DISABLED'}")
-    print("API Documentation: http://localhost:8000/docs")
-    print("=" * 80)
+    startup_logger.info(
+        "AegisGraph Sentinel 2.0 is ready — API documentation: http://localhost:8000/docs",
+        event_type="startup_ready",
+        metadata={
+            "mode": "PRODUCTION" if MODEL_AVAILABLE else "DEMO",
+            "graph_detection": "ENABLED" if state.graph_loaded else "DISABLED",
+            "innovations": "ENABLED" if INNOVATIONS_AVAILABLE else "DISABLED",
+        },
+    )
 
 
 def _start_runtime_background_tasks():
@@ -1104,9 +1202,9 @@ def _start_runtime_background_tasks():
 
 
 async def _stop_runtime_background_tasks():
-    print("Shutting down AegisGraph Sentinel 2.0...")
+    _api_logger.info("Shutting down AegisGraph Sentinel 2.0...", event_type="shutdown_start")
     await state.tasks.cancel_all_tasks(timeout_seconds=10.0)
-    print("Background tasks stopped cleanly")
+    _api_logger.info("Background tasks stopped cleanly", event_type="shutdown_complete")
 
 
 def _run_scoring_pipeline(
@@ -1116,10 +1214,17 @@ def _run_scoring_pipeline(
     target_account: str,
     lateral_detector,
     innovations_available: bool,
+    subgraph_cache: Optional[dict] = None,
+    subgraph_cache_lock=None,
 ) -> dict:
     """
     Pure synchronous scoring work safe to run in a thread pool executor.
     Returns the final risk_result dict.
+
+    subgraph_cache and subgraph_cache_lock are optional. When provided
+    (typically by the batch endpoint), subgraph extractions for the same
+    source account are shared across concurrent scorer calls, reducing
+    redundant graph traversals from O(N) to O(unique source accounts).
     """
     risk_result = compute_risk_score(
         transaction=transaction,
@@ -1131,6 +1236,8 @@ def _run_scoring_pipeline(
         centrality_window_size=state.centrality_window_size,
         account_profiles=state.account_profiles,
         config=state.config,
+        subgraph_cache=subgraph_cache,
+        subgraph_cache_lock=subgraph_cache_lock,
     )
 
     if lateral_detector is not None:
@@ -1226,7 +1333,10 @@ async def lifespan(app: FastAPI):
     app.state.runtime = state.runtime
 
     # Set up recovery manager and watchdog
-    recovery_manager = RecoveryManager(state.runtime.health_monitor)
+    recovery_manager = RecoveryManager(
+        state.runtime.health_monitor,
+        resource_manager=state.runtime.resource_manager,
+    )
     watchdog = RuntimeWatchdog(
         health_monitor=state.runtime.health_monitor,
         task_registry=state.tasks,
@@ -1236,8 +1346,8 @@ async def lifespan(app: FastAPI):
     state.runtime.watchdog = watchdog
 
     def restart_honeypot_task():
-        for task in list(state.tasks._tasks.keys()):
-            if state.tasks._tasks[task].name == "honeypot_auto_release" and not task.done():
+        for task in state.tasks.find_tasks_by_name("honeypot_auto_release"):
+            if not task.done():
                 task.cancel()
         state.tasks.register_task(
             _honeypot_auto_release_loop(),
@@ -1251,7 +1361,11 @@ async def lifespan(app: FastAPI):
         max_attempts=3
     )
 
-    lifecycle_manager.register_startup("startup_banner", _startup_banner, critical=False)
+    lifecycle_manager.register_startup(
+        "startup_banner",
+        lambda: _startup_banner(startup_logger),
+        critical=False,
+    )
     lifecycle_manager.register_startup(
         "load_configuration",
         lambda: _load_runtime_configuration(startup_logger),
@@ -1379,6 +1493,19 @@ async def health_check_v1(verbose: bool = False):
     return _build_health_response(include_details=verbose)
 
 @app.get(
+    "/health/liveness",
+    tags=["General"],
+    summary="Lightweight liveness probe",
+)
+async def liveness():
+    """
+    Lightweight health check endpoint for Kubernetes liveness probes.
+    Returns immediately to ensure responsiveness.
+    """
+    return {"status": "ok", "service": "AegisGraph Sentinel 2.0"}
+
+
+@app.get(
     "/health",
     response_model=HealthCheckResponse,
     response_model_exclude_none=True,
@@ -1387,9 +1514,9 @@ async def health_check_v1(verbose: bool = False):
 )
 async def health_check(verbose: bool = False):
     """
-    Health check endpoint
+    Health check endpoint (readiness/detailed)
     
-    Returns service status and basic statistics
+    Returns detailed service status and diagnostics
     """
     return _build_health_response(include_details=verbose)
 
@@ -1488,8 +1615,15 @@ async def check_transaction(
                         event_type="keystroke_analysis_error",
                     )
         
-        # Offload CPU-bound scoring + graph analysis to thread pool
+        # Offload CPU-bound scoring + graph analysis to thread pool.
+        # When called from the batch endpoint, _batch_subgraph_cache and
+        # _batch_subgraph_lock are set via context variables so that subgraph
+        # extractions for the same source account are shared across concurrent
+        # tasks within the same batch, reducing graph traversals from O(N) to
+        # O(unique source accounts).
         loop = asyncio.get_running_loop()
+        subgraph_cache = _batch_subgraph_cache.get()
+        subgraph_lock = _batch_subgraph_lock.get()
         risk_result = await loop.run_in_executor(
             None,
             partial(
@@ -1500,6 +1634,8 @@ async def check_transaction(
                 request.target_account,
                 lateral_movement_detector if LATERAL_MOVEMENT_AVAILABLE else None,
                 INNOVATIONS_AVAILABLE,
+                subgraph_cache,
+                subgraph_lock,
             ),
         )
 
@@ -1631,35 +1767,57 @@ async def check_transaction(
         processing_time_ms = (time.time() - start_time) * 1000
         
         internal_decision = _normalize_decision(risk_result['decision'])
+
+        # Prepare response with innovation fields
+        decision = _decision_to_api_value(internal_decision)
+
+        # When the ML model is unavailable, the heuristic pipeline produces a
+        # conservative base score (~0.22). Apply an amount-based override so that
+        # high-value transactions are still flagged appropriately in degraded mode.
+        # Thresholds are read from config/thresholds.yaml (fallback_scoring section)
+        # so they can be tuned without a code change.
+        _model_degraded = False
+        _trigger = _FALLBACK_SCORING.get("fallback_trigger_score", 0.25)
+        if not MODEL_AVAILABLE and risk_result.get('risk_score', 0) <= _trigger:
+            amount = request.amount
+            _block_above = _FALLBACK_SCORING.get("block_above", 200000)
+            _block_med_above = _FALLBACK_SCORING.get("block_medium_above", 100000)
+            _review_above = _FALLBACK_SCORING.get("review_above", 50000)
+            _allow_above = _FALLBACK_SCORING.get("allow_above", 10000)
+
+            if amount > _block_above:
+                risk_result['risk_score'] = _FALLBACK_SCORING.get("block_score", 0.85)
+                internal_decision = "BLOCK"
+            elif amount > _block_med_above:
+                risk_result['risk_score'] = _FALLBACK_SCORING.get("block_medium_score", 0.72)
+                internal_decision = "BLOCK"
+            elif amount > _review_above:
+                risk_result['risk_score'] = _FALLBACK_SCORING.get("review_score", 0.48)
+                internal_decision = "REVIEW"
+            elif amount > _allow_above:
+                risk_result['risk_score'] = _FALLBACK_SCORING.get("allow_score", 0.35)
+                internal_decision = "ALLOW"
+
+            decision = _decision_to_api_value(internal_decision)
+            _model_degraded = True
+            _api_logger.warning(
+                "ML model unavailable; using amount-based fallback scoring",
+                event_type="fallback_scoring_active",
+                metadata={
+                    "transaction_id": request.transaction_id,
+                    "amount": amount,
+                    "fallback_decision": internal_decision,
+                    "fallback_risk_score": risk_result['risk_score'],
+                },
+            )
+
         async with _get_metrics_lock():
-            # Update statistics atomically to avoid interleaving concurrent request mutations.
+            # Update statistics AFTER amount-scaling override so stats
+            # always reflect the final decision returned to the caller.
             state.requests_processed += 1
             state.decisions[internal_decision] += 1
             state.total_risk_score += risk_result['risk_score']
             state.total_processing_time += processing_time_ms
-        
-        # Prepare response with innovation fields
-        decision = _decision_to_api_value(internal_decision)
-
-        # --- FIX #559: Amount-Scaling Logic Fallback Override ---
-        # Agar production ML model available nahi hai aur fallback base score (0.22) aa raha hai,
-        # toh transaction amount ke hisab se risk_score aur decision ko scale karo.
-        if not MODEL_AVAILABLE and risk_result.get('risk_score', 0) <= 0.25:
-            amount = request.amount
-            if amount > 200000:
-                risk_result['risk_score'] = 0.85
-                internal_decision = "BLOCK"
-            elif amount > 100000:
-                risk_result['risk_score'] = 0.72
-                internal_decision = "BLOCK"
-            elif amount > 50000:
-                risk_result['risk_score'] = 0.48
-                internal_decision = "REVIEW"
-            elif amount > 10000:
-                risk_result['risk_score'] = 0.35
-                internal_decision = "ALLOW"
-            decision = _decision_to_api_value(internal_decision)
-        # --------------------------------------------------------
 
         response = TransactionCheckResponse(
             transaction_id=request.transaction_id,
@@ -1675,6 +1833,7 @@ async def check_transaction(
             blockchain_evidence_id=blockchain_evidence_id,
             behavioral_stress_detected=behavioral_stress_detected,
             lateral_movement_detected=risk_result.get('lateral_movement_detected', False),
+            model_degraded=_model_degraded,
         )
         
         # Add lateral movement info to explanation if detected
@@ -1897,6 +2056,18 @@ async def fraud_stream_websocket(websocket: WebSocket, client_id: str):
     Accepts WebSocket connections and streams fraud decisions.
     Requires periodic 'ping' messages as heartbeats.
     """
+    # Validate client_id before accepting the connection.
+    # Rejects values that are empty, overly long (>64 chars), or contain
+    # characters that could cause log injection or memory exhaustion.
+    if not _WS_CLIENT_ID_RE.match(client_id):
+        _api_logger.warning(
+            "WebSocket connection rejected: invalid client_id format",
+            event_type="ws_invalid_client_id",
+            metadata={"client_id_length": len(client_id)},
+        )
+        await websocket.close(code=1008, reason="Invalid client_id: use alphanumeric, hyphens, or underscores (max 64 chars)")
+        return
+
     try:
         require_role(Role.ANALYST)(websocket.headers.get("X-API-Key"))
     except HTTPException:
@@ -1926,20 +2097,37 @@ async def fraud_stream_websocket(websocket: WebSocket, client_id: str):
 async def check_batch_transactions(request: BatchTransactionRequest):
     """
     Check multiple transactions in batch
-    
+
     Processes multiple transactions and returns results for each.
     Maximum batch size: 100 transactions.
+
+    Performance note: a shared subgraph cache (dict + Lock) is created
+    once per batch and made available to every check_transaction() call
+    via context variables. When the same source account appears in
+    multiple transactions, the graph neighbourhood is extracted only once.
+    This reduces get_approx_subgraph() calls from O(N) to O(unique source
+    accounts), cutting batch latency significantly for real-world fraud
+    workloads where a mule account may appear dozens of times per batch.
     """
     start_time = time.time()
     max_concurrent_tasks = 8
     semaphore = asyncio.Semaphore(max_concurrent_tasks)
     txns = request.transactions
 
+    # Per-batch subgraph cache shared across all concurrent scorer calls
+    batch_subgraph_cache: Dict = {}
+    batch_subgraph_lock: Lock = Lock()
+
     async def _process_transaction(txn_request):
         async with semaphore:
-            return await check_transaction(txn_request)
+            return await check_transaction(
+                txn_request,
+                lateral_movement_detector=await get_lateral_movement_detector(),
+                honeypot_manager=await get_honeypot_manager(),
+                blockchain_manager=await get_blockchain_manager(),
+            )
 
-    async def _stream_batch_response():
+    async def _stream_batch_response_impl():
         api_to_internal = {
             "approve": FraudDecision.ALLOW.value,
             "review": FraudDecision.REVIEW.value,
@@ -1986,6 +2174,23 @@ async def check_batch_transactions(request: BatchTransactionRequest):
             f"\"processing_time_ms\":{processing_time_ms}"
             "}"
         )
+
+    async def _stream_batch_response():
+        # Set the context variables inside the streaming generator so that
+        # the set and the matching reset both run in the same context. A
+        # StreamingResponse body iterator executes in a context copied by
+        # Starlette, so a token created in the endpoint context cannot be
+        # reset here. Child tasks created during iteration copy this context
+        # after the values are set, so the shared cache stays visible to
+        # every check_transaction() call.
+        token_cache = _batch_subgraph_cache.set(batch_subgraph_cache)
+        token_lock = _batch_subgraph_lock.set(batch_subgraph_lock)
+        try:
+            async for chunk in _stream_batch_response_impl():
+                yield chunk
+        finally:
+            _batch_subgraph_cache.reset(token_cache)
+            _batch_subgraph_lock.reset(token_lock)
 
     return StreamingResponse(_stream_batch_response(), media_type="application/json")
 
@@ -2573,6 +2778,50 @@ async def blast_radius_analysis(request: BlastRadiusRequest):
         processing_time_ms=round(processing_time_ms, 3),
         timestamp=timestamp,
     )
+
+
+@app.post(
+    "/api/v1/alerts/summarize",
+    response_model=AlertSummaryResponse,
+    tags=["Alerts"],
+    summary="Generate AI-powered summary for anomaly alerts",
+    description="Takes complex alert JSON and uses Gemini to return a 2-sentence plain English summary.",
+    dependencies=[Depends(require_role(Role.ANALYST))]
+)
+async def summarize_alert(request: AlertSummaryRequest):
+    start_time = time.time()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY is not configured")
+    
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        
+        model = genai.GenerativeModel('gemini-1.5-flash',
+            system_instruction="You are a cybersecurity expert. Summarize this anomaly alert in exactly 2 plain English sentences for a non-technical analyst."
+        )
+        
+        alert_json = json.dumps(request.alert_data, indent=2)
+        response = await asyncio.to_thread(model.generate_content, alert_json)
+        
+        summary = response.text.strip()
+        
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        return AlertSummaryResponse(
+            summary=summary,
+            processing_time_ms=processing_time_ms
+        )
+    except ImportError:
+        raise HTTPException(status_code=500, detail="google-generativeai package is not installed")
+    except Exception as e:
+        _api_logger.error(
+            f"Failed to generate alert summary: {e}",
+            event_type="api_internal_error",
+            metadata={"operation": "Alert summary", "error_type": type(e).__name__},
+        )
+        raise HTTPException(status_code=500, detail="Failed to generate AI summary")
 
 
 def main():

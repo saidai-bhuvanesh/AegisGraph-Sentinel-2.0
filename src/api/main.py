@@ -162,7 +162,19 @@ from .schemas import (
     CreateCaseRequest,
     FraudCaseResponse,
     UpdateCaseRequest,
+    # AI Copilot (Phase 6)
+    CopilotSummaryResponse,
+    CopilotExplanationResponse,
+    CopilotTimelineEvent,
+    CopilotTimelineResponse,
+    CopilotRecommendationResponse,
+    CopilotAskRequest,
+    CopilotAskResponse,
+    AnalystFeedbackRequest,
+    AnalystFeedbackResponse,
 )
+import src.copilot as copilot
+
 from ..case_management import get_case_store
 from ..case_management.models import CasePriority, CaseStatus, EvidenceType, validate_status_transition
 from .security import require_api_key, Role, require_role
@@ -3120,6 +3132,205 @@ async def get_case_timeline(case_id: str):
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# AI Copilot Endpoints (Phase 6)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/v1/copilot/cases/{case_id}/summary",
+    response_model=CopilotSummaryResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get AI-generated summary for a case",
+)
+async def get_copilot_case_summary(
+    case_id: str,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Generate or retrieve a plain English summary and risk highlights for a fraud case."""
+    analyst = x_analyst_id or "system"
+    try:
+        summary_obj = await copilot.generate_case_summary(case_id, analyst)
+        return CopilotSummaryResponse(
+            case_id=summary_obj.case_id,
+            summary=summary_obj.summary,
+            suspicious_activity=summary_obj.suspicious_activity,
+            key_risk_factors=summary_obj.key_risk_factors,
+            unusual_patterns=summary_obj.unusual_patterns,
+            created_at=summary_obj.created_at,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to generate copilot case summary: {exc}")
+        raise HTTPException(status_code=500, detail="Internal AI engine failure") from exc
+
+
+@app.get(
+    "/api/v1/copilot/cases/{case_id}/explanation",
+    response_model=CopilotExplanationResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Explain risk score of a case using AI",
+)
+async def get_copilot_risk_explanation(
+    case_id: str,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Explain risk score breakdown, graph proximity, mule behavior, and HTGNN decisions."""
+    analyst = x_analyst_id or "system"
+    try:
+        explanation_obj = await copilot.explain_risk_score(case_id, analyst)
+        return CopilotExplanationResponse(
+            case_id=explanation_obj.case_id,
+            risk_score=explanation_obj.risk_score,
+            breakdown_explanation=explanation_obj.breakdown_explanation,
+            graph_relationship_explanation=explanation_obj.graph_relationship_explanation,
+            mule_detection_reasoning=explanation_obj.mule_detection_reasoning,
+            htgnn_decisions_explanation=explanation_obj.htgnn_decisions_explanation,
+            created_at=explanation_obj.created_at,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to generate risk explanation: {exc}")
+        raise HTTPException(status_code=500, detail="Internal AI engine failure") from exc
+
+
+@app.get(
+    "/api/v1/copilot/cases/{case_id}/timeline",
+    response_model=CopilotTimelineResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get AI-enriched chronological investigation narrative",
+)
+async def get_copilot_timeline(
+    case_id: str,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Return chronological timeline events, each enriched with a human-readable investigation narrative."""
+    analyst = x_analyst_id or "system"
+    try:
+        enriched_events = await copilot.generate_timeline_narrative(case_id, analyst)
+        return CopilotTimelineResponse(
+            case_id=case_id,
+            events=[
+                CopilotTimelineEvent(
+                    timestamp=e["timestamp"],
+                    type=e["type"],
+                    action=e["action"],
+                    description=e["description"],
+                    narrative=e["narrative"],
+                )
+                for e in enriched_events
+            ],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to generate timeline narrative: {exc}")
+        raise HTTPException(status_code=500, detail="Internal AI engine failure") from exc
+
+
+@app.get(
+    "/api/v1/copilot/cases/{case_id}/recommendations",
+    response_model=CopilotRecommendationResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get AI recommended actions for a case",
+)
+async def get_copilot_recommendations(
+    case_id: str,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Retrieve next-action recommendations, supporting reasoning, and escalation path."""
+    analyst = x_analyst_id or "system"
+    try:
+        rec_obj = await copilot.generate_recommendations(case_id, analyst)
+        return CopilotRecommendationResponse(
+            case_id=rec_obj.case_id,
+            recommended_actions=rec_obj.recommended_actions,
+            reasoning=rec_obj.reasoning,
+            escalation_path=rec_obj.escalation_path,
+            created_at=rec_obj.created_at,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to generate copilot recommendations: {exc}")
+        raise HTTPException(status_code=500, detail="Internal AI engine failure") from exc
+
+
+@app.post(
+    "/api/v1/copilot/cases/{case_id}/ask",
+    response_model=CopilotAskResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Ask AI a specific question about a case",
+)
+async def ask_copilot_question(
+    case_id: str,
+    request: CopilotAskRequest,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Submit a free-form question about the case data. Checked for injection and PII masked."""
+    analyst = x_analyst_id or "system"
+    try:
+        answer = await copilot.ask_copilot(case_id, analyst, request.question)
+        return CopilotAskResponse(
+            case_id=case_id,
+            answer=answer,
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to query copilot: {exc}")
+        raise HTTPException(status_code=500, detail="Internal AI engine failure") from exc
+
+
+@app.post(
+    "/api/v1/copilot/cases/{case_id}/feedback",
+    response_model=AnalystFeedbackResponse,
+    tags=["AI Copilot"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Submit feedback on AI copilot output quality",
+)
+async def submit_copilot_feedback(
+    case_id: str,
+    request: AnalystFeedbackRequest,
+    x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+):
+    """Log an analyst's feedback regarding copilot usefulness score."""
+    analyst = x_analyst_id or "system"
+    try:
+        # Verify case exists
+        case_store = get_case_store()
+        if not case_store.get_case(case_id):
+            raise KeyError(f"Case '{case_id}' not found.")
+            
+        feedback_store = copilot.get_copilot_store()
+        fb = feedback_store.add_feedback(
+            case_id=case_id,
+            analyst_id=analyst,
+            score=request.usefulness_score,
+            text=request.feedback_text,
+        )
+        return AnalystFeedbackResponse(
+            feedback_id=fb.feedback_id,
+            case_id=fb.case_id,
+            analyst_id=fb.analyst_id,
+            usefulness_score=fb.usefulness_score,
+            feedback_text=fb.feedback_text,
+            created_at=fb.created_at,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _api_logger.error(f"Failed to submit feedback: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to record feedback") from exc
 
 
 def main():

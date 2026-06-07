@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegisgraph-sentinel-service
+  namespace: aegis
+  labels:
+    app: aegisgraph-sentinel
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: aegisgraph-sentinel

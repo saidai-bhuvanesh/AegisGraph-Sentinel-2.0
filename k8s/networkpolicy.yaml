@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegisgraph-sentinel-policy
+  namespace: aegis
+spec:
+  podSelector:
+    matchLabels:
+      app: aegisgraph-sentinel
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller pods
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow egress to DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to DBs and queues within same namespace
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [aegis-redis, aegis-neo4j, aegis-kafka]
+      ports:
+        - protocol: TCP
+          port: 6379 # Redis
+        - protocol: TCP
+          port: 7687 # Neo4j Bolt
+        - protocol: TCP
+          port: 9092 # Kafka Broker

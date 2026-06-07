@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-config
+  namespace: aegis
+  labels:
+    app: aegisgraph-sentinel
+data:
+  ENV: "production"
+  ALLOWED_ORIGINS: "https://aegis.enterprise.io"
+  REDIS_URL: "redis://aegis-redis-service:6379"
+  NEO4J_URL: "bolt://aegis-neo4j-service:7687"
+  KAFKA_BOOTSTRAP_SERVERS: "aegis-kafka-service:9092"

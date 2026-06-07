@@ -1,0 +1,45 @@
+# Version Control
+.git
+.gitattributes
+.gitignore
+
+# Python build and cache artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Development/Local config files
+.env
+.env.example
+.editorconfig
+.prettierrc
+
+# Logs and outputs
+*.log
+log.txt
+pytest_output.log
+collect_output.log
+
+# Documentation and metadata
+docs/
+CONTRIBUTING.md
+README.md
+SECURITY.md
+GITHUB_ISSUES.md
+
+# Gemini / Antigravity Agent Local Caches
+.gemini/
+brain/
+scratch/
+temp_check.py
+
+# Tests and examples (production image only needs src)
+tests/
+examples/
+test_*.py

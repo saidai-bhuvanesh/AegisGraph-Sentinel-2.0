@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegisgraph-sentinel
+  namespace: aegis
+  labels:
+    app: aegisgraph-sentinel
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: aegisgraph-sentinel
+  template:
+    metadata:
+      labels:
+        app: aegisgraph-sentinel
+    spec:
+      containers:
+        - name: aegisgraph-sentinel
+          image: aegisgraph-sentinel:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          envFrom:
+            - configMapRef:
+                name: aegis-config
+          env:
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-secret
+                  key: NEO4J_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-secret
+                  key: JWT_SECRET
+            - name: AEGIS_API_KEY_HASHES
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-secret
+                  key: AEGIS_API_KEY_HASHES
+          startupProbe:
+            httpGet:
+              path: /api/v1/health/startup
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12 # Give 60 seconds total to startup
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/liveness
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/readiness
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: false # Disable if writing logs locally
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001

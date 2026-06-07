@@ -1379,6 +1379,12 @@ async def lifespan(app: FastAPI):
     Application lifespan. Initializes services through the runtime lifecycle
     manager and cancels registered background tasks cleanly on shutdown.
     """
+    # Register core DI services and share the global ws_manager instance
+    from src.core.dependency_container import container
+    from src.api.di import register_services
+    container.register("websocket_manager", ws_manager, replace=True)
+    register_services()
+
     def _close_neo4j_provider():
         if hasattr(state.transaction_graph, "close") and callable(state.transaction_graph.close):
             state.transaction_graph.close()
@@ -1611,6 +1617,30 @@ async def root():
 )
 async def health_check_v1(verbose: bool = False):
     """Health check endpoint (v1 routing)"""
+    return _build_health_response(include_details=verbose)
+
+
+@app.get(
+    "/api/v1/health/",
+    response_model=HealthCheckResponse,
+    response_model_exclude_none=True,
+    tags=["Health"],
+    dependencies=[Depends(_require_verbose_health_access)],
+)
+async def health_check_v1_slash(verbose: bool = False):
+    """Health check endpoint (v1 routing with trailing slash)"""
+    return _build_health_response(include_details=verbose)
+
+
+@app.get(
+    "/api/v1/health/details",
+    response_model=HealthCheckResponse,
+    response_model_exclude_none=True,
+    tags=["Health"],
+    dependencies=[Depends(_require_verbose_health_access)],
+)
+async def health_check_v1_details(verbose: bool = True):
+    """Health check endpoint (detailed v1 routing)"""
     return _build_health_response(include_details=verbose)
 
 @app.get(

@@ -9,12 +9,17 @@ Implements real-time HTGNN-based fraud scoring with:
 - Fallback to heuristics
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import islice
+import os
+
 import torch
 import torch.nn as nn
 import numpy as np
 import logging
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+from threading import Lock
+from typing import Dict, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import json
@@ -41,6 +46,22 @@ class FraudScore:
     
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), default=str)
+
+
+class _ThreadSafeCache:
+    """Thread-safe dict wrapper for concurrent subgraph caching."""
+
+    def __init__(self):
+        self._data: Dict[str, Dict] = {}
+        self._lock = Lock()
+
+    def get(self, key: str) -> Optional[Dict]:
+        with self._lock:
+            return self._data.get(key)
+
+    def set(self, key: str, value: Dict) -> None:
+        with self._lock:
+            self._data[key] = value
 
 
 class ProductionRiskScorer:
@@ -76,6 +97,8 @@ class ProductionRiskScorer:
         self.model_version = model_version
         self.enable_heuristic_fallback = enable_heuristic_fallback
         
+        self._executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
+
         logger.info(
             f"Initialized ProductionRiskScorer "
             f"(model={model_version}, device={device})"
@@ -86,6 +109,7 @@ class ProductionRiskScorer:
         transaction: Dict,
         reference_time: Optional[datetime] = None,
         k_hops: int = 2,
+        _subgraph_cache: Optional["_ThreadSafeCache"] = None,
     ) -> FraudScore:
         """
         Score a single transaction using HTGNN.
@@ -107,12 +131,17 @@ class ProductionRiskScorer:
         start_time = datetime.utcnow()
         
         try:
-            # Extract subgraph around source account
-            subgraph = self.graph_constructor.get_subgraph_around_node(
-                node_id=transaction['source_account'],
-                k_hops=k_hops,
-                reference_time=reference_time,
-            )
+            # Extract subgraph around source account (cached per batch)
+            source = transaction['source_account']
+            subgraph = _subgraph_cache.get(source) if _subgraph_cache is not None else None
+            if subgraph is None:
+                subgraph = self.graph_constructor.get_subgraph_around_node(
+                    node_id=source,
+                    k_hops=k_hops,
+                    reference_time=reference_time,
+                )
+                if _subgraph_cache is not None:
+                    _subgraph_cache.set(source, subgraph)
             
             # Run inference
             with torch.no_grad():
@@ -215,13 +244,60 @@ class ProductionRiskScorer:
         Returns:
             List of FraudScores
         """
-        scores = []
-        for i in range(0, len(transactions), batch_size):
-            batch = transactions[i:i+batch_size]
-            for txn in batch:
-                score = self.score_transaction(txn, reference_time)
-                scores.append(score)
-        return scores
+        if not transactions:
+            return []
+
+        max_workers = max(1, min(len(transactions), batch_size, os.cpu_count() or 1))
+        scores: List[Optional[FraudScore]] = [None] * len(transactions)
+
+        # Per-batch cache keyed by source_account to avoid re-extracting the same neighborhood
+        subgraph_cache = _ThreadSafeCache()
+
+        executor = self._executor
+        for transaction_batch in self._iter_transaction_batches(transactions, max_workers):
+            future_to_index = {
+                executor.submit(self.score_transaction, txn, reference_time, 2, subgraph_cache): idx
+                for idx, txn in transaction_batch
+            }
+
+            for future in as_completed(future_to_index):
+                idx = future_to_index.pop(future)
+                scores[idx] = future.result()
+
+        return [score for score in scores if score is not None]
+
+    def close(self) -> None:
+        """Shut down the shared executor, draining pending work."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception as exc:
+            logger.error("ProductionRiskScorer cleanup failed: %s", exc)
+
+    def _iter_transaction_batches(
+        self,
+        transactions: List[Dict],
+        batch_size: int,
+    ) -> Iterator[List[Tuple[int, Dict]]]:
+        """Yield bounded batches of indexed transactions for concurrent scoring."""
+        iterator = iter(enumerate(transactions))
+
+        while True:
+            batch = list(islice(iterator, batch_size))
+            if not batch:
+                break
+            yield batch
     
     def _make_decision(self, risk_score: float) -> Tuple[str, float]:
         """

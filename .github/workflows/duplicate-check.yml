@@ -1,0 +1,35 @@
+name: Duplicate Issue Detector
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  check-duplicate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Duplicates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Search for issues with similar titles (case-insensitive)
+          SIMILAR_ISSUES=$(gh issue list \
+            --repo "$REPO" \
+            --search "\"$ISSUE_TITLE\" in:title" \
+            --state all \
+            --limit 10 \
+            --json number,title \
+            --jq '.[] | select(.number != env.ISSUE_NUMBER) | .number')
+          
+          if [ -n "$SIMILAR_ISSUES" ]; then
+            FIRST_DUPLICATE=$(echo "$SIMILAR_ISSUES" | head -1)
+            gh issue comment "$ISSUE_NUMBER" \
+              --body "🤖 This appears to be a duplicate of #$FIRST_DUPLICATE. Please check the original thread."
+            gh issue edit "$ISSUE_NUMBER" --add-label "duplicate"
+          fi

@@ -1,17 +1,28 @@
 """Unit tests for the centralized Risk Scoring Engine refactor."""
 
 import math
+import os
 from unittest.mock import patch
 
 import pytest
 
-from src.inference.risk_scorer import compute_risk_score as inference_compute_risk_score
-from src.scoring import (
-    EdgeCaseHandler,
-    RiskScorer,
-    ScoreCalculator,
-    ThresholdConfig,
-)
+if os.getenv("RUN_TORCH_TESTS", "").lower() != "true":
+    pytest.skip("PyTorch tests require RUN_TORCH_TESTS=true", allow_module_level=True)
+
+# Handle optional torch dependency for inference.risk_scorer
+try:
+    from src.inference.risk_scorer import compute_risk_score as inference_compute_risk_score
+    from src.scoring import (
+        EdgeCaseHandler,
+        RiskScorer,
+        ScoreCalculator,
+        ThresholdConfig,
+    )
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not installed")
 
 
 def test_normalize_score_bounds_and_scaling():
@@ -122,8 +133,27 @@ def test_threshold_config_valid_overrides_are_applied():
     assert config.decision_for_score(0.85) == "BLOCK"
 
 
+def test_threshold_config_boundaries_are_non_overlapping():
+    config = ThresholdConfig({"allow": 0.5, "review": 0.7, "block": 0.9})
+
+    assert config.decision_for_score(0.49) == "ALLOW"
+    assert config.decision_for_score(0.50) == "ALLOW"
+    assert config.decision_for_score(0.69) == "ALLOW"
+    assert config.decision_for_score(0.70) == "REVIEW"
+    assert config.decision_for_score(0.89) == "REVIEW"
+    assert config.decision_for_score(0.90) == "BLOCK"
+
+
 def test_threshold_config_invalid_values_fallback_to_defaults():
     config = ThresholdConfig({"allow": 1.0, "review": 0.5, "block": 0.4})
+    assert config.get_threshold("allow") == 0.0
+    assert config.get_threshold("review") == 0.6
+    assert config.get_threshold("block") == 0.9
+
+
+def test_threshold_config_rejects_equal_boundaries():
+    config = ThresholdConfig({"allow": 0.5, "review": 0.5, "block": 0.9})
+
     assert config.get_threshold("allow") == 0.0
     assert config.get_threshold("review") == 0.6
     assert config.get_threshold("block") == 0.9

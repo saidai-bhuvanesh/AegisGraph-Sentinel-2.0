@@ -1,0 +1,151 @@
+name: "PR Dynamic Code Verifier"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+  
+jobs:
+  verify-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout PR Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Project Dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest pytest-cov mock
+
+      - name: Extract Context and Test Universally
+        id: universal_tester
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prBody = "";
+            if (context.eventName === 'pull_request') {
+              prBody = context.payload.pull_request.body || "";
+            } else if (context.eventName === 'issue_comment') {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              prBody = pr.data.body || "";
+            }
+            const match = prBody.match(/Fixes\s*#\s*(\d+)/i);
+            
+            let issueLabels = [];
+            if (match) {
+              const issueNumber = match[1];
+              core.info(`Linked Issue Found: #${issueNumber}`);
+              try {
+                const issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: parseInt(issueNumber, 10)
+                });
+                issueLabels = issue.data.labels.map(l => l.name.toLowerCase());
+                core.info(`Fetched Issue Labels: ${issueLabels.join(', ')}`);
+              } catch (e) {
+                core.info(`Could not fetch issue details: ${e.message}. Proceeding with changed files analysis.`);
+              }
+            } else {
+              core.info("No linked issue found in PR description. Relying entirely on file diff analysis.");
+            }
+            
+            core.exportVariable('PR_LABELS', issueLabels.join(','));
+            core.exportVariable('BASE_REF', context.eventName === 'pull_request' ? context.payload.pull_request.base.ref : 'master');
+            core.exportVariable('HEAD_SHA', context.eventName === 'pull_request' ? context.payload.pull_request.head.sha : 'HEAD');
+            core.exportVariable('BASE_SHA', context.eventName === 'pull_request' ? context.payload.pull_request.base.sha : '');
+
+      - name: Smart Test Discovery & Execution
+        run: |
+          import os, sys, subprocess
+          
+          labels = os.getenv('PR_LABELS', '').split(',')
+          base_ref = os.getenv('BASE_REF', 'master')
+          head_sha = os.getenv('HEAD_SHA', 'HEAD')
+          base_sha = os.getenv('BASE_SHA', '')
+          
+          print(f"Analyzing modified files: PR head={head_sha} vs base={base_sha or base_ref}")
+          
+          # 1. Use explicit SHAs to always diff the correct commits
+          try:
+              if base_sha:
+                  diff_cmd = ["git", "diff", f"{base_sha}...{head_sha}", "--name-only"]
+              else:
+                  diff_cmd = ["git", "diff", f"origin/{base_ref}...{head_sha}", "--name-only"]
+              changed_files = subprocess.check_output(diff_cmd).decode('utf-8').splitlines()
+          except Exception as e:
+              print(f"Warning: Falling back to local diff check due to history constraint: {e}")
+              changed_files = subprocess.check_output(["git", "diff", "--name-only", "HEAD~1"]).decode('utf-8').splitlines()
+          
+          print(f"Detected changed files: {changed_files}")
+          
+          # 2. Extract unique directories that are being targeted/modified
+          impacted_dirs = set()
+          for f in changed_files:
+              if f.endswith('.py') and '/' in f:
+                  # E.g., extracts 'src/inference' from 'src/inference/scorer.py'
+                  parent_dir = os.path.dirname(f)
+                  impacted_dirs.add(os.path.basename(parent_dir))
+          
+          print(f"Impacted structural component keywords: {list(impacted_dirs)}")
+          
+          # 3. Universal Test Search Engine
+          matched_test_files = []
+          
+          # Look through your entire test/ or tests/ folder universally
+          test_root = "tests" if os.path.exists("tests") else "test" if os.path.exists("test") else None
+          
+          if test_root:
+              for root, _, files in os.walk(test_root):
+                  for file in files:
+                      if file.startswith("test_") and file.endswith(".py"):
+                          file_lower = file.lower()
+                          file_path = os.path.join(root, file)
+                          
+                          # Match Strategy A: Does test file name match a directory altered (e.g. test_inference.py)?
+                          dir_match = any(d in file_lower for d in impacted_dirs if d)
+                          
+                          # Match Strategy B: Does test file name match an issue label keyword (e.g. test_performance.py)?
+                          label_match = any(l.replace('type:', '') in file_lower for l in labels if l)
+                          
+                          if dir_match or label_match:
+                              if file_path not in matched_test_files:
+                                  matched_test_files.append(file_path)
+          
+          # 4. Running the selection
+          if matched_test_files:
+              print(f"🎯 Universally discovered relevant test targets: {matched_test_files}")
+              test_execution_command = ["pytest"] + matched_test_files + ["-v"]
+          else:
+              print("📦 No specific test files matched the changed source files. Skipping — narrow change without applicable tests.")
+              sys.exit(0)
+              
+          print(f"Running: {' '.join(test_execution_command)}")
+          execution_result = subprocess.run(test_execution_command)
+          
+          if execution_result.returncode != 0:
+              print("❌ Dynamic verification testing returned failure validation bounds.")
+              sys.exit(1)
+              
+          print("✅ Universal checks cleared successfully!")
+        shell: python

@@ -3,9 +3,14 @@ Pydantic schemas for API request/response validation
 """
 # Schema validation for all fraud detection endpoints
 
-from pydantic import BaseModel, Field, field_validator, AliasChoices, ConfigDict
-from typing import Optional, List, Dict, Union
-from datetime import datetime
+from pydantic import BaseModel, Field, field_validator, model_validator, AliasChoices, ConfigDict
+from typing import Optional, List, Dict, Union, Any, Literal
+from src.api.validators import (
+    TransactionValidator,
+    ValidationError,
+    VALID_CURRENCY_CODES,
+    VALID_MODES,
+)
 
 
 class BiometricsData(BaseModel):
@@ -15,11 +20,14 @@ class BiometricsData(BaseModel):
     keystroke_events: Optional[List[Dict]] = Field(default=None, description="Raw keystroke events")
     mouse_movements: Optional[List[Dict]] = Field(default=None, description="Raw mouse movement events")
     
-    @field_validator('hold_times', 'flight_times') #ready
+    @field_validator('hold_times', 'flight_times')
     @classmethod
-    def validate_positive(cls, v):
-        if any(x < 0 for x in v):
-            raise ValueError("Times must be non-negative")
+    def validate_biometric_values(cls, v):
+        """Validate biometric array constraints."""
+        if len(v) > 1000:
+            raise ValueError("Biometric arrays cannot exceed 1000 elements")
+        if any(x < 0 or x > 10000 for x in v):
+            raise ValueError("Biometric values must be between 0 and 10000 milliseconds")
         return v
 
 
@@ -57,12 +65,77 @@ class TransactionCheckRequest(BaseModel):
     )
     amount: float = Field(gt=0, description="Transaction amount")
     currency: str = Field(default="INR", description="Currency code")
-    mode: str = Field(default="payment", description="Transaction mode (UPI, IMPS, NEFT, etc.)")
-    timestamp: Union[str, float] = Field(description="Transaction timestamp (ISO format or epoch seconds)")
+    mode: str = Field(default="UPI", description="Transaction mode (UPI, IMPS, NEFT, etc.)")
+    timestamp: Union[str, float] = Field(description="Transaction timestamp (ISO 8601 UTC format or epoch seconds)")
     device_id: Optional[str] = Field(default=None, description="Device identifier")
     biometrics: Optional[BiometricsData] = Field(default=None, description="Behavioral biometrics")
     ip_address: Optional[str] = Field(default=None, description="IP address")
     location: Optional[str] = Field(default=None, description="Transaction location")
+    @field_validator('timestamp')
+    @classmethod
+    def validate_timestamp(cls, v):
+        """Validate and normalize timestamp to ISO 8601 UTC format.
+
+        Accepted inputs include Unix epoch seconds and timezone-aware ISO 8601
+        strings (Z or explicit UTC offsets).
+        """
+        try:
+            v = TransactionValidator.normalize_timestamp(v)
+            TransactionValidator.validate_timestamp(v)
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return v
+    
+    @field_validator('source_account')
+    @classmethod
+    def validate_source_account(cls, v):
+        """Validate source account format."""
+        try:
+            TransactionValidator.validate_account_id(v, "source_account")
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return v
+    
+    @field_validator('target_account')
+    @classmethod
+    def validate_target_account(cls, v):
+        """Validate target account format."""
+        try:
+            TransactionValidator.validate_account_id(v, "target_account")
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return v
+    
+    @field_validator('currency')
+    @classmethod
+    def validate_currency(cls, v):
+        """Validate currency code."""
+        try:
+            TransactionValidator.validate_currency_code(v)
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return v
+    
+    @field_validator('mode')
+    @classmethod
+    def validate_mode(cls, v):
+        """Validate transaction mode."""
+        try:
+            TransactionValidator.validate_mode(v)
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return v
+    
+    @model_validator(mode='after')
+    def validate_cross_fields(self):
+        """Validate cross-field constraints."""
+        try:
+            TransactionValidator.validate_cross_fields(
+                self.source_account, self.target_account
+            )
+        except ValidationError as e:
+            raise ValueError(e.suggestion) from e
+        return self
     
 
 
@@ -93,8 +166,6 @@ class TransactionCheckResponse(BaseModel):
                     "recommended_action": "BLOCK_AND_ALERT_LAW_ENFORCEMENT",
                     "processing_time_ms": 142.5,
                     "timestamp": "2026-02-26T14:30:00.142Z",
-                    "honeypot_activated": True,
-                    "honeypot_id": "HP_ABC123",
                     "blockchain_evidence_id": "EVID_XYZ789",
                     "behavioral_stress_detected": True,
                     "lateral_movement_detected": False
@@ -113,16 +184,43 @@ class TransactionCheckResponse(BaseModel):
     timestamp: str = Field(description="Response timestamp")
     
     # Innovation fields (real-time integration)
-    honeypot_activated: bool = Field(default=False, description="Honeypot escrow activated (Innovation 2)")
-    honeypot_id: Optional[str] = Field(default=None, description="Honeypot trap ID if activated")
+    # Note: Honeypot activation state is intentionally excluded from client responses
+    # to prevent information disclosure about defensive mechanisms.
+    # Internal logging captures honeypot activity for monitoring/audit.
     blockchain_evidence_id: Optional[str] = Field(default=None, description="Blockchain evidence ID (Innovation 6)")
     behavioral_stress_detected: bool = Field(default=False, description="Keystroke stress detected (Innovation 1)")
     lateral_movement_detected: bool = Field(default=False, description="Lateral movement pattern detected (MITRE ATT&CK TA0008)")
+    model_degraded: bool = Field(
+        default=False,
+        description=(
+            "True when the ML model was unavailable and the response was produced "
+            "by the amount-based fallback heuristic instead of the GNN pipeline. "
+            "Downstream consumers should treat degraded-mode decisions with lower "
+            "confidence and flag them in audit trails accordingly."
+        ),
+    )
     
 
 
 class BatchTransactionRequest(BaseModel):
     """Request schema for batch transaction checking"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "transactions": [
+                    {
+                        "transaction_id": "TXN123456789",
+                        "source_account": "ACC987654321",
+                        "target_account": "ACC123456789",
+                        "amount": 50000.00,
+                        "currency": "INR",
+                        "mode": "UPI",
+                        "timestamp": "2026-02-26T14:30:00Z"
+                    }
+                ]
+            }
+        }
+    )
     transactions: List[TransactionCheckRequest] = Field(description="List of transactions to check")
     
     @field_validator('transactions')
@@ -135,6 +233,18 @@ class BatchTransactionRequest(BaseModel):
 
 class BatchTransactionResponse(BaseModel):
     """Response schema for batch transaction checking"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "results": [],
+                "total_processed": 1,
+                "total_blocked": 0,
+                "total_review": 0,
+                "total_allowed": 1,
+                "processing_time_ms": 45.2
+            }
+        }
+    )
     results: List[TransactionCheckResponse]
     total_processed: int
     total_blocked: int
@@ -145,18 +255,51 @@ class BatchTransactionResponse(BaseModel):
 
 class HealthCheckResponse(BaseModel):
     """Health check response"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "status": "operational",
+                "service": "AegisGraph Sentinel 2.0",
+                "version": "2.0.0",
+                "model_loaded": True,
+                "graph_loaded": True,
+                "innovations_available": True,
+                "uptime_seconds": 3600.5,
+                "requests_processed": 1500,
+                "timestamp": "2026-06-06T12:00:00Z"
+            }
+        }
+    )
     status: str = Field(description="Service status")
-    version: str = Field(default="2.0", description="API version")
-    model_loaded: bool = Field(description="Whether model is loaded")
-    graph_loaded: bool = Field(description="Whether transaction graph is loaded")
-    innovations_available: bool = Field(default=True, description="Whether innovations are available")
-    uptime_seconds: float = Field(default=0.0, description="Service uptime in seconds")
-    requests_processed: int = Field(description="Total requests processed")
-    timestamp: str = Field(description="Response timestamp")
+    service: str = Field(default="AegisGraph Sentinel", description="Service name")
+    version: Optional[str] = Field(default=None, description="API version")
+    model_loaded: Optional[bool] = Field(default=None, description="Whether model is loaded")
+    graph_loaded: Optional[bool] = Field(default=None, description="Whether transaction graph is loaded")
+    innovations_available: Optional[bool] = Field(default=None, description="Whether innovations are available")
+    uptime_seconds: Optional[float] = Field(default=None, description="Service uptime in seconds")
+    requests_processed: Optional[int] = Field(default=None, description="Total requests processed")
+    timestamp: Optional[str] = Field(default=None, description="Response timestamp")
+    services_health: Optional[Dict[str, Dict[str, Any]]] = Field(default=None, description="Detailed health stats for registered services")
 
 
 class ModelInfo(BaseModel):
     """Model information"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "model_name": "HTGNN-Fraud-Detector",
+                "version": "v1.2",
+                "architecture": "Heterogeneous Temporal Graph Attention Network",
+                "parameters": 5000000,
+                "trained_on": "2026-01-15T00:00:00Z",
+                "performance_metrics": {
+                    "precision": 0.968,
+                    "recall": 0.942,
+                    "f1_score": 0.955
+                }
+            }
+        }
+    )
     model_name: str
     version: str
     architecture: str
@@ -167,6 +310,24 @@ class ModelInfo(BaseModel):
 
 class StatsResponse(BaseModel):
     """Statistics response"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "total_requests": 1500,
+                "decisions": {
+                    "ALLOW": 1400,
+                    "REVIEW": 80,
+                    "BLOCK": 20
+                },
+                "avg_risk_score": 0.15,
+                "avg_processing_time_ms": 112.5,
+                "uptime_seconds": 3600.5,
+                "total_checks": 1500,
+                "flagged_transactions": 100,
+                "average_response_time": 112.5
+            }
+        }
+    )
     total_requests: int
     decisions: Dict[str, int]
     avg_risk_score: float
@@ -179,6 +340,15 @@ class StatsResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     """Error response schema"""
+    model_config = ConfigDict(
+        json_schema_extra = {
+            "example": {
+                "error": "Authentication Failed",
+                "detail": "Invalid API Key provided",
+                "timestamp": "2026-06-06T12:00:00Z"
+            }
+        }
+    )
     error: str = Field(description="Error message")
     detail: Optional[str] = Field(default=None, description="Detailed error information")
     timestamp: str = Field(description="Error timestamp")
@@ -192,7 +362,9 @@ class ErrorResponse(BaseModel):
 class VoiceAnalysisRequest(BaseModel):
     """Request for voice stress analysis"""
     transaction_id: str = Field(description="Transaction ID for correlation")
-    audio_base64: str = Field(max_length=5_000_000, description="Base64-encoded audio WAV file (max 30 seconds)")
+    # Keep this small so the API accepts only short voice clips and rejects
+    # large uploads before they can consume excessive memory or CPU.
+    audio_base64: str = Field(max_length=500_000, description="Base64-encoded audio WAV file (max 30 seconds)")
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     
     @field_validator('sample_rate')
@@ -327,14 +499,63 @@ class HoneypotStatsResponse(BaseModel):
 
 
 # Innovation 6: Blockchain Evidence Chain
+class BlockchainRiskBreakdown(BaseModel):
+    """Strict risk breakdown accepted for blockchain evidence sealing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    graph: float = Field(ge=0, le=1, description="Graph-based risk")
+    velocity: float = Field(ge=0, le=1, description="Velocity-based risk")
+    behavior: float = Field(ge=0, le=1, description="Behavioral risk")
+    entropy: float = Field(ge=0, le=1, description="Entropy-based risk")
+
+
+class BlockchainRiskResult(BaseModel):
+    """Canonical risk result sealed onto the blockchain."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk_score: float = Field(ge=0, le=1, description="Overall risk score")
+    decision: Literal["ALLOW", "REVIEW", "BLOCK"] = Field(
+        description="Decision: ALLOW, REVIEW, or BLOCK"
+    )
+    confidence: float = Field(ge=0, le=1, description="Confidence in the decision")
+    breakdown: BlockchainRiskBreakdown = Field(description="Strict risk breakdown")
+
+
 class BlockchainSealRequest(BaseModel):
     """Request to seal evidence in blockchain"""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "transaction_id": "TXN123456789",
+                "source_account": "ACC987654321",
+                "target_account": "ACC123456789",
+                "amount": 50000.0,
+                "risk_result": {
+                    "risk_score": 0.92,
+                    "decision": "BLOCK",
+                    "confidence": 0.97,
+                    "breakdown": {
+                        "graph": 0.89,
+                        "velocity": 0.95,
+                        "behavior": 0.88,
+                        "entropy": 0.93,
+                    },
+                },
+                "explanation": "High-risk mule chain pattern detected...",
+            }
+        },
+    )
+
     transaction_id: str
     source_account: str
     target_account: str
-    amount: float
-    risk_result: Dict = Field(description="Complete risk assessment result")
-    explanation: str = Field(description="Decision explanation")
+    amount: float = Field(gt=0, description="Transaction amount")
+    risk_result: BlockchainRiskResult = Field(description="Complete risk assessment result")
+    explanation: str = Field(max_length=5000, description="Decision explanation")
 
 
 class BlockchainEvidenceResponse(BaseModel):
@@ -379,7 +600,6 @@ class LegalExportRequest(BaseModel):
     evidence_id: str
     case_number: str = Field(description="Legal case number")
     requesting_authority: str = Field(description="Law enforcement agency")
-    authorization_token: str = Field(description="Authorization token for access")
 
 
 class LegalExportResponse(BaseModel):
@@ -431,3 +651,364 @@ class HoneypotDebugRequest(BaseModel):
     currency: str = Field(default="INR", description="Currency code")
     risk_score: float = Field(default=1.0, description="Risk score for the transaction")
     fraud_indicators: List[str] = Field(default_factory=list, description="Identified fraud indicators")
+
+
+# ============================================================================
+# BLAST RADIUS ANALYTICS SCHEMAS
+# ============================================================================
+
+
+class BlastRadiusRequest(BaseModel):
+    """
+    Request for blast-radius contagion analysis.
+
+    Given a verified-fraudulent or compromised node, the backend performs a
+    bounded graph traversal and computes a Contagion Score for every reachable
+    neighbor, returning results bucketed by risk tier.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "node_id": "ACC987654321",
+                "max_depth": 3,
+            }
+        }
+    )
+
+    node_id: str = Field(
+        description="ID of the flagged/compromised node to start from (e.g. account, device, IP)."
+    )
+    max_depth: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description=(
+            "Maximum hop count to traverse away from the source node. "
+            "Accepted range: 1–5. Defaults to 3."
+        ),
+    )
+
+
+class ContagionNode(BaseModel):
+    """
+    A single node reached during blast-radius traversal together with its
+    computed Contagion Score and assigned risk tier.
+    """
+
+    node_id: str = Field(description="Unique identifier of the affected node.")
+    contagion_score: float = Field(
+        ge=0.0,
+        description=(
+            "Accumulated Contagion Score Sc = Σ weight_edge / depth². "
+            "Higher values indicate stronger proximity to the fraud origin."
+        ),
+    )
+    risk_tier: str = Field(
+        description="Risk classification: CRITICAL (≥0.70), HIGH (≥0.35), or SUSPICIOUS (≥0.10)."
+    )
+    depth: int = Field(
+        ge=1,
+        description="Shortest-path hop distance from the source node.",
+    )
+
+
+class BlastRadiusResponse(BaseModel):
+    """
+    Structured blast-radius report categorising all reachable nodes by risk
+    tier so that consuming microservices can lock or quarantine them
+    automatically.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "source_node": "ACC987654321",
+                "max_depth": 3,
+                "total_nodes_evaluated": 12,
+                "critical": [
+                    {
+                        "node_id": "ACC_RING_001",
+                        "contagion_score": 0.85,
+                        "risk_tier": "CRITICAL",
+                        "depth": 1,
+                    }
+                ],
+                "high": [
+                    {
+                        "node_id": "DEV_abc123",
+                        "contagion_score": 0.50,
+                        "risk_tier": "HIGH",
+                        "depth": 2,
+                    }
+                ],
+                "suspicious": [
+                    {
+                        "node_id": "IP_10_0_0_5",
+                        "contagion_score": 0.18,
+                        "risk_tier": "SUSPICIOUS",
+                        "depth": 3,
+                    }
+                ],
+                "processing_time_ms": 14.7,
+                "timestamp": "2026-05-31T10:00:00.000Z",
+            }
+        }
+    )
+
+    source_node: str = Field(description="The origin node from which traversal started.")
+    max_depth: int = Field(description="The max-depth limit used for this traversal.")
+    total_nodes_evaluated: int = Field(
+        ge=0,
+        description="Total number of unique neighbor nodes scored (above 0.0).",
+    )
+    critical: List[ContagionNode] = Field(
+        default_factory=list,
+        description="Nodes with Contagion Score ≥ 0.70 — immediate lockdown recommended.",
+    )
+    high: List[ContagionNode] = Field(
+        default_factory=list,
+        description="Nodes with 0.35 ≤ Contagion Score < 0.70 — enhanced monitoring required.",
+    )
+    suspicious: List[ContagionNode] = Field(
+        default_factory=list,
+        description="Nodes with 0.10 ≤ Contagion Score < 0.35 — flag for investigation.",
+    )
+    processing_time_ms: float = Field(description="Wall-clock time taken to compute the blast radius.")
+    timestamp: str = Field(description="ISO-8601 UTC timestamp of the response.")
+
+# ============================================================================
+# ALERT SUMMARIES (AI-Powered)
+# ============================================================================
+
+class AlertSummaryRequest(BaseModel):
+    """Request schema for summarizing an anomaly alert"""
+    alert_data: Dict[str, Any] = Field(description="The complex JSON data of the anomaly alert")
+
+
+class AlertSummaryResponse(BaseModel):
+    """Response schema for the AI-generated alert summary"""
+    summary: str = Field(description="A plain English, 2-sentence explanation of the alert")
+    processing_time_ms: float = Field(description="Time taken to generate the summary in ms")
+
+
+# ============================================================================
+# CASE MANAGEMENT SCHEMAS (Phase 4)
+# ============================================================================
+
+class CreateCaseRequest(BaseModel):
+    """Request to open a new fraud investigation case."""
+    transaction_id: str = Field(description="Transaction ID that triggered the alert")
+    risk_score: float = Field(ge=0.0, le=1.0, description="Risk score from the fraud engine")
+    decision: str = Field(description="Engine decision: ALLOW, REVIEW, or BLOCK")
+    priority: Optional[str] = Field(default="MEDIUM", description="Case priority: LOW, MEDIUM, HIGH, CRITICAL")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Optional tags for categorisation")
+
+    @field_validator("decision")
+    @classmethod
+    def validate_decision(cls, v: str) -> str:
+        if v not in {"ALLOW", "REVIEW", "BLOCK"}:
+            raise ValueError("decision must be ALLOW, REVIEW, or BLOCK")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: Optional[str]) -> Optional[str]:
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        if v and v.upper() not in valid:
+            raise ValueError(f"priority must be one of: {valid}")
+        return v.upper() if v else "MEDIUM"
+
+
+class UpdateCaseRequest(BaseModel):
+    """Partial update for an existing case (all fields optional)."""
+    status: Optional[str] = Field(default=None, description="New status: OPEN, IN_PROGRESS, ESCALATED, RESOLVED, CLOSED")
+    assigned_analyst: Optional[str] = Field(default=None, description="Analyst ID to assign the case to")
+    priority: Optional[str] = Field(default=None, description="New priority: LOW, MEDIUM, HIGH, CRITICAL")
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        valid = {"OPEN", "IN_PROGRESS", "ESCALATED", "RESOLVED", "CLOSED"}
+        if v and v.upper() not in valid:
+            raise ValueError(f"status must be one of: {valid}")
+        return v.upper() if v else None
+
+    @field_validator("priority")
+    @classmethod
+    def validate_update_priority(cls, v: Optional[str]) -> Optional[str]:
+        valid = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        if v and v.upper() not in valid:
+            raise ValueError(f"priority must be one of: {valid}")
+        return v.upper() if v else None
+
+
+class AddCommentRequest(BaseModel):
+    """Request to add an investigation note to a case."""
+    text: str = Field(min_length=1, max_length=5000, description="Investigation note text")
+
+
+class AddEvidenceRequest(BaseModel):
+    """Request to attach evidence to a case."""
+    evidence_type: str = Field(description="Type: TRANSACTION_LINK, GRAPH_SNAPSHOT, NOTE, DOCUMENT")
+    description: str = Field(min_length=1, max_length=2000, description="Description of the evidence")
+    reference_id: Optional[str] = Field(default=None, description="Optional ID referencing the source (e.g. transaction_id)")
+
+    @field_validator("evidence_type")
+    @classmethod
+    def validate_evidence_type(cls, v: str) -> str:
+        valid = {"TRANSACTION_LINK", "GRAPH_SNAPSHOT", "NOTE", "DOCUMENT"}
+        if v.upper() not in valid:
+            raise ValueError(f"evidence_type must be one of: {valid}")
+        return v.upper()
+
+
+class CaseCommentResponse(BaseModel):
+    """Serialised investigation comment."""
+    comment_id: str
+    case_id: str
+    analyst_id: str
+    text: str
+    created_at: str
+
+
+class CaseEvidenceResponse(BaseModel):
+    """Serialised case evidence record."""
+    evidence_id: str
+    case_id: str
+    analyst_id: str
+    evidence_type: str
+    description: str
+    reference_id: Optional[str]
+    created_at: str
+
+
+class CaseAuditEventResponse(BaseModel):
+    """A single immutable audit event from the case timeline."""
+    event_id: str
+    case_id: str
+    analyst_id: str
+    action: str
+    old_value: Optional[str]
+    new_value: Optional[str]
+    timestamp: str
+
+
+class FraudCaseResponse(BaseModel):
+    """Full fraud case detail response."""
+    case_id: str
+    transaction_id: str
+    risk_score: float
+    decision: str
+    status: str
+    priority: str
+    assigned_analyst: Optional[str]
+    created_at: str
+    updated_at: str
+    tags: List[str]
+    comment_count: int
+    evidence_count: int
+
+
+class CaseListResponse(BaseModel):
+    """Paginated list of fraud cases."""
+    cases: List[FraudCaseResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class CaseTimelineResponse(BaseModel):
+    """Immutable audit trail for a case."""
+    case_id: str
+    events: List[CaseAuditEventResponse]
+    total_events: int
+
+
+class CaseDashboardResponse(BaseModel):
+    """Aggregated case management dashboard statistics."""
+    total_cases: int
+    open_cases: int
+    in_progress_cases: int
+    escalated_cases: int
+    by_status: Dict[str, int]
+    by_priority: Dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# AI Copilot Schemas (Phase 6)
+# ---------------------------------------------------------------------------
+
+class CopilotSummaryResponse(BaseModel):
+    """AI-generated case summary details."""
+    case_id: str
+    summary: str
+    suspicious_activity: List[str]
+    key_risk_factors: List[str]
+    unusual_patterns: List[str]
+    created_at: str
+
+
+class CopilotExplanationResponse(BaseModel):
+    """AI-generated risk score and network traversal explanations."""
+    case_id: str
+    risk_score: float
+    breakdown_explanation: str
+    graph_relationship_explanation: str
+    mule_detection_reasoning: str
+    htgnn_decisions_explanation: str
+    created_at: str
+
+
+class CopilotTimelineEvent(BaseModel):
+    """Chronological event enriched with AI narrative."""
+    timestamp: str
+    type: str
+    action: str
+    description: str
+    narrative: str
+
+
+class CopilotTimelineResponse(BaseModel):
+    """Timeline of events enriched with AI narratives."""
+    case_id: str
+    events: List[CopilotTimelineEvent]
+
+
+class CopilotRecommendationResponse(BaseModel):
+    """AI recommendations for fraud operations."""
+    case_id: str
+    recommended_actions: List[str]
+    reasoning: str
+    escalation_path: str
+    created_at: str
+
+
+class CopilotAskRequest(BaseModel):
+    """Request for asking the AI Copilot a question about a case."""
+    question: str = Field(..., max_length=1000, description="The query to ask the AI copilot.")
+
+
+class CopilotAskResponse(BaseModel):
+    """Response containing the AI Copilot's answer."""
+    case_id: str
+    answer: str
+    timestamp: str
+
+
+class AnalystFeedbackRequest(BaseModel):
+    """Request to submit feedback on AI-generated copilot insights."""
+    usefulness_score: int = Field(..., ge=1, le=5, description="Usefulness rating from 1 (poor) to 5 (excellent).")
+    feedback_text: Optional[str] = Field(None, max_length=2000, description="Optional written notes from the analyst.")
+
+
+class AnalystFeedbackResponse(BaseModel):
+    """Response after submitting analyst feedback."""
+    feedback_id: str
+    case_id: str
+    analyst_id: str
+    usefulness_score: int
+    feedback_text: Optional[str]
+    created_at: str
+

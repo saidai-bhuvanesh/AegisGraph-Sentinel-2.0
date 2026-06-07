@@ -24,10 +24,12 @@ jobs:
           script: |
             let body = "";
             let prNumber = context.issue.number;
+            let isFork = false;
             
             if (context.eventName === 'pull_request') {
               body = context.payload.pull_request.body || "";
               prNumber = context.payload.pull_request.number;
+              isFork = context.payload.pull_request.head.repo.full_name !== context.payload.repository.full_name;
             } else {
               const pr = await github.rest.pulls.get({
                 owner: context.repo.owner,
@@ -35,9 +37,11 @@ jobs:
                 pull_number: prNumber
               });
               body = pr.data.body || "";
+              isFork = pr.data.head.repo.full_name !== pr.data.base.repo.full_name;
             }
             core.setOutput('body', body);
             core.setOutput('number', prNumber.toString());
+            core.setOutput('is_fork', isFork ? 'true' : 'false');
 
       - name: Detect Backend-Only Change Set
         id: change_scope
@@ -84,10 +88,18 @@ jobs:
           backend_only = os.getenv('BACKEND_ONLY', 'false').lower() == 'true'
           errors = []
           
-          # Require Issue Number Link
+          # Require Issue Number Link (skip for .github/ workflow-only changes)
+          files_changed = os.listdir('.') if os.path.exists('.') else []
+          is_workflow_only = any(f.startswith('.github/') for f in files_changed)
+          
           match = re.search(r'Fixes\s*#\s*(\d+)', body, re.IGNORECASE)
           if not match:
-              errors.append("- **Missing Linked Issue:** You must include a valid issue number link (e.g., `Fixes #123`).")
+              if is_workflow_only:
+                  # Workflow-only PRs don't need issue number
+                  with open("issue_num.txt", "w") as f:
+                      f.write("")
+              else:
+                  errors.append("- **Missing Linked Issue:** You must include a valid issue number link (e.g., `Fixes #123`).")
           else:
               with open("issue_num.txt", "w") as f:
                   f.write(match.group(1))
@@ -102,7 +114,7 @@ jobs:
               sys.exit(1)
         shell: python
 
-      - name: Reject and Auto-Close PR
+      - name: Reject PR - Handle Fork vs Repo Differently
         if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
@@ -112,21 +124,58 @@ jobs:
             try { errors = fs.readFileSync('errors.txt', 'utf8'); } catch (err) {}
             
             const prNumber = parseInt(${{ steps.pr_info.outputs.number }}, 10);
-            const commentBody = `⚠️ **PULL REQUEST REJECTED & CLOSED** ⚠️\n\n@${context.actor}, your Pull Request has been automatically closed because it is missing core requirements:\n\n${errors}\n\n💡 **How to fix:** Edit your description, add the details and screenshot, and then **re-open** this PR!`;
+            const isFork = '${{ steps.pr_info.outputs.is_fork }}' === 'true';
             
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: commentBody
-            });
+            // Add a label to indicate validation failure
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: ['needs-revision']
+              });
+            } catch (e) {
+              console.log('Could not add label:', e.message);
+            }
             
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-              state: 'closed'
-            });
+            // For fork PRs, we cannot close them - just add a comment if possible
+            if (isFork) {
+              const commentBody = `⚠️ **PR Validation Failed** ⚠️\n\n@${context.actor}, your Pull Request is missing core requirements:\n\n${errors}\n\n💡 **How to fix:** Please edit your PR description to include the missing information, then re-open the PR.\n\nNote: For security reasons, maintainers must manually close fork PRs. Please close this PR yourself after updating it.`;
+              
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (e) {
+                console.log('Could not post comment on fork PR:', e.message);
+              }
+              // Set output for informational purposes
+              core.setOutput('fork_pr_notice', 'Fork PR cannot be auto-closed. Please close manually.');
+            } else {
+              // For same-repo PRs, we can close them
+              const commentBody = `⚠️ **PULL REQUEST REJECTED & CLOSED** ⚠️\n\n@${context.actor}, your Pull Request has been automatically closed because it is missing core requirements:\n\n${errors}\n\n💡 **How to fix:** Edit your description, add the details and screenshot, and then **re-open** this PR!`;
+              
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (e) {
+                console.log('Could not post comment:', e.message);
+              }
+              
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                state: 'closed'
+              });
+            }
 
       - name: Process GSSoC Rewards and Approval
         if: success()

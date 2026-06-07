@@ -135,44 +135,83 @@ def _schedule_live_refresh(interval_ms: int = 1500) -> None:
         st_autorefresh(interval=interval_ms, key=COMMAND_CENTER_REFRESH_KEY)
 
 
-def _safe_api_get(url: str, timeout: int = 5) -> dict:
+def _api_headers(extra: dict | None = None) -> dict:
+    """Return the base auth headers required by all protected API endpoints.
+
+    Reads ``AEGIS_UI_API_KEY`` from the environment first, then falls back
+    to ``st.secrets`` (key ``AEGIS_UI_API_KEY``).  An optional *extra* dict
+    is merged in last so callers can add endpoint-specific headers (e.g.
+    ``X-Honeypot-Token``) without duplicating the base auth logic.
+
+    Returns an empty dict when no key is configured so that unauthenticated
+    deployments keep working — the backend will return 401/403 which the
+    helpers surface as a clear warning.
+    """
+    key = os.getenv("AEGIS_UI_API_KEY", "")
+    if not key:
+        try:
+            key = st.secrets.get("AEGIS_UI_API_KEY", "")
+        except Exception:
+            key = ""
+    headers: dict = {}
+    if key:
+        headers["X-API-Key"] = key
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _safe_api_get(url: str, timeout: int = 5, extra_headers: dict | None = None) -> dict:
     """GET *url* and return the parsed JSON body on success.
 
     Returns an empty dict on any network failure or non-2xx response and
     logs the error so it appears in centralized log aggregators.  A
     Streamlit warning banner is shown when the backend is unreachable so
     operators can distinguish "no data" from "API offline".
+
+    Auth headers (``X-API-Key``) are injected automatically via
+    ``_api_headers()``.  Pass *extra_headers* for endpoint-specific tokens
+    such as ``X-Honeypot-Token``.
     """
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=timeout, headers=_api_headers(extra_headers))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
         logger.warning("API unreachable (ConnectionError): %s", url)
-        st.warning("⚠️ Cannot reach the API server — verify it is running (`python -m uvicorn src.api.main:app --reload`).")
+        st.warning("⚠️ Cannot reach the API server — verify it is running (`uvicorn src.api.main:app --reload`).")
         return {}
     except requests.exceptions.Timeout:
         logger.warning("API request timed out: %s", url)
         st.warning("⚠️ API server did not respond in time. It may be overloaded.")
         return {}
     except requests.exceptions.HTTPError as exc:
-        logger.warning("API returned HTTP %s: %s", exc.response.status_code, url)
+        status = exc.response.status_code
+        logger.warning("API returned HTTP %s: %s", status, url)
+        if status in (401, 403):
+            st.warning(
+                f"⚠️ API returned {status} — verify **AEGIS_UI_API_KEY** is set correctly "
+                "in your environment or `st.secrets`."
+            )
         return {}
     except Exception as exc:
         logger.error("Unexpected error fetching %s: %s", url, exc)
         return {}
 
 
-def _safe_api_post(url: str, payload: dict, timeout: int = 5) -> dict | None:
+def _safe_api_post(url: str, payload: dict, timeout: int = 5, extra_headers: dict | None = None) -> dict | None:
     """POST *payload* to *url* and return the parsed JSON body on success.
 
     Returns ``None`` on any network failure or non-2xx response and logs
     the error.  Unlike ``_safe_api_get``, this helper does **not** show a
     Streamlit banner because POST calls are typically made from background
     threads where ``st.*`` calls are not safe.
+
+    Auth headers (``X-API-Key``) are injected automatically via
+    ``_api_headers()``.  Pass *extra_headers* for endpoint-specific tokens.
     """
     try:
-        response = requests.post(url, json=payload, timeout=timeout)
+        response = requests.post(url, json=payload, timeout=timeout, headers=_api_headers(extra_headers))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
@@ -920,7 +959,7 @@ elif page == "💳 Transaction Scan":
                         f"{API_URL}/api/v1/fraud/check",
                         json=transaction,
                         timeout=10,
-                        headers={"X-API-Key": "demo-key"},
+                        headers=_api_headers(),
                     )
 
                     if response.status_code == 200:
@@ -1116,7 +1155,7 @@ elif page == "📁 Batch Triage":
                                 f"{API_URL}/api/v1/fraud/check",
                                 json=txn,
                                 timeout=30,
-                                headers={"X-API-Key": "demo-key"},
+                                headers=_api_headers(),
                             )
                             if response.status_code == 200:
                                 result = response.json()
@@ -2295,117 +2334,103 @@ elif page == "🧪 Innovation Lab":
 
         st.markdown("---")
 
-        # Honeypot Statistics
-        try:
-            response = requests.get(f"{API_URL}/api/v1/honeypot/stats", timeout=5)
-            if response.status_code == 200:
-                stats = response.json()
+        # Honeypot Statistics — auth injected automatically by _safe_api_get
+        stats = _safe_api_get(f"{API_URL}/api/v1/honeypot/stats", timeout=5)
+        if stats:
+            col1, col2, col3, col4 = st.columns(4)
 
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
-                    st.metric("Total Activated", stats["total_activated"])
-                with col2:
-                    st.metric(
-                        "Arrests",
-                        stats["total_arrests"],
-                        delta=f"{stats['arrest_rate']:.1%} rate",
-                    )
-                with col3:
-                    st.metric(
-                        "Recovery", f"₹{stats['total_recovered'] / 10000000:.2f} Cr"
-                    )
-                with col4:
-                    st.metric("Networks Dismantled", stats["networks_dismantled"])
-
-                st.markdown("---")
-
-                # More detailed metrics
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    st.metric(
-                        "False Positives",
-                        stats["false_positives"],
-                        delta=f"{stats['false_positive_rate']:.1%}",
-                    )
-                with col_b:
-                    st.metric(
-                        "Avg Time to Arrest",
-                        f"{stats['avg_time_to_arrest_minutes']:.1f} min",
-                    )
-                with col_c:
-                    arrest_rate_colored = (
-                        "🟢"
-                        if stats["arrest_rate"] >= 0.8
-                        else "🟡"
-                        if stats["arrest_rate"] >= 0.6
-                        else "🔴"
-                    )
-                    st.metric(
-                        "System Status",
-                        f"{arrest_rate_colored} Operational (Operational)",
-                    )
-            else:
-                st.warning(
-                    "⚠️ Honeypot statistics unavailable (innovation module not running)"
+            with col1:
+                st.metric("Total Activated", stats["total_activated"])
+            with col2:
+                st.metric(
+                    "Arrests",
+                    stats["total_arrests"],
+                    delta=f"{stats['arrest_rate']:.1%} rate",
                 )
-        except Exception as e:
-            st.error(f"Unable to fetch honeypot stats: {e}")
-            st.info("💡 Ensure API is running with innovation modules loaded")
+            with col3:
+                st.metric(
+                    "Recovery", f"₹{stats['total_recovered'] / 10000000:.2f} Cr"
+                )
+            with col4:
+                st.metric("Networks Dismantled", stats["networks_dismantled"])
+
+            st.markdown("---")
+
+            # More detailed metrics
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric(
+                    "False Positives",
+                    stats["false_positives"],
+                    delta=f"{stats['false_positive_rate']:.1%}",
+                )
+            with col_b:
+                st.metric(
+                    "Avg Time to Arrest",
+                    f"{stats['avg_time_to_arrest_minutes']:.1f} min",
+                )
+            with col_c:
+                arrest_rate_colored = (
+                    "🟢"
+                    if stats["arrest_rate"] >= 0.8
+                    else "🟡"
+                    if stats["arrest_rate"] >= 0.6
+                    else "🔴"
+                )
+                st.metric(
+                    "System Status",
+                    f"{arrest_rate_colored} Operational (Operational)",
+                )
+        else:
+            st.warning(
+                "⚠️ Honeypot statistics unavailable — ensure the API is running with innovation modules loaded."
+            )
 
         st.markdown("---")
 
-        # Active Honeypots
+        # Active Honeypots — auth injected automatically by _safe_api_get
         st.subheader("🎭 Active Honeypot Traps")
 
-        try:
-            response = requests.get(f"{API_URL}/api/v1/honeypot/active", timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                active = data["active_honeypots"]
+        active_data = _safe_api_get(f"{API_URL}/api/v1/honeypot/active", timeout=5)
+        active = active_data.get("active_honeypots", []) if active_data else []
 
-                if len(active) > 0:
-                    st.info(
-                        f"🔴 Active honeypots: {len(active)} currently monitoring withdrawal attempts"
-                    )
-
-                    for hp in active:
-                        with st.expander(
-                            f"Honeypot {hp['honeypot_id']} - ₹{hp['amount']:,.2f}"
-                        ):
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**Transaction ID**: {hp['transaction_id']}")
-                                st.write(f"**Target Account**: {hp['target_account']}")
-                                st.write(
-                                    f"**Amount**: ₹{hp['amount']:,.2f} {hp['currency']}"
-                                )
-                                status_text = (
-                                    "Police alerted"
-                                    if hp["police_alerted"]
-                                    else "Monitoring"
-                                )
-                                st.write(
-                                    f"**Status**: {'🚨' if hp['police_alerted'] else '👁️'} {status_text} ({status_text})"
-                                )
-                            with col2:
-                                st.write(f"**Activated**: {hp['activated_at']}")
-                                st.write(
-                                    f"**Time Remaining**: {hp['time_remaining_seconds'] // 60} min {hp['time_remaining_seconds'] % 60} sec"
-                                )
-                                st.write(
-                                    f"**Withdrawal Attempts**: {hp['withdrawal_attempts']}"
-                                )
-                                if hp["last_attempt_location"]:
-                                    st.write(
-                                        f"**Last Attempt Location**: {hp['last_attempt_location']}"
-                                    )
-                else:
-                    st.success(_accessible_status("✅", "No active honeypots"))
-            else:
-                st.warning("⚠️ Active honeypots unavailable")
-        except Exception as e:
-            st.error(f"Unable to fetch active honeypots: {e}")
+        if len(active) > 0:
+            st.info(
+                f"🔴 Active honeypots: {len(active)} currently monitoring withdrawal attempts"
+            )
+            for hp in active:
+                with st.expander(
+                    f"Honeypot {hp['honeypot_id']} - ₹{hp['amount']:,.2f}"
+                ):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Transaction ID**: {hp['transaction_id']}")
+                        st.write(f"**Target Account**: {hp['target_account']}")
+                        st.write(
+                            f"**Amount**: ₹{hp['amount']:,.2f} {hp['currency']}"
+                        )
+                        status_text = (
+                            "Police alerted"
+                            if hp["police_alerted"]
+                            else "Monitoring"
+                        )
+                        st.write(
+                            f"**Status**: {'🚨' if hp['police_alerted'] else '👁️'} {status_text} ({status_text})"
+                        )
+                    with col2:
+                        st.write(f"**Activated**: {hp['activated_at']}")
+                        st.write(
+                            f"**Time Remaining**: {hp['time_remaining_seconds'] // 60} min {hp['time_remaining_seconds'] % 60} sec"
+                        )
+                        st.write(
+                            f"**Withdrawal Attempts**: {hp['withdrawal_attempts']}"
+                        )
+                        if hp["last_attempt_location"]:
+                            st.write(
+                                f"**Last Attempt Location**: {hp['last_attempt_location']}"
+                            )
+        else:
+            st.success(_accessible_status("✅", "No active honeypots"))
 
     # Sub-page: Voice Stress Analysis
     elif innovation_page == "📞 Voice Stress Analysis":
@@ -2460,7 +2485,10 @@ elif page == "🧪 Innovation Lab":
                         }
 
                         response = requests.post(
-                            f"{API_URL}/api/v1/voice/analyze", json=payload, timeout=30
+                            f"{API_URL}/api/v1/voice/analyze",
+                            json=payload,
+                            timeout=30,
+                            headers=_api_headers(),
                         )
 
                         if response.status_code == 200:
@@ -2625,6 +2653,7 @@ elif page == "🧪 Innovation Lab":
                         f"{API_URL}/api/v1/accounts/score-opening",
                         json=payload,
                         timeout=10,
+                        headers=_api_headers(),
                     )
 
                     if response.status_code == 200:
@@ -2783,7 +2812,10 @@ elif page == "🧪 Innovation Lab":
                     },
                 }
                 resp = requests.post(
-                    f"{API_URL}/api/v1/fraud/check", json=payload, timeout=10
+                    f"{API_URL}/api/v1/fraud/check",
+                    json=payload,
+                    timeout=10,
+                    headers=_api_headers(),
                 )
                 if resp.status_code == 200:
                     result = resp.json()
@@ -2826,7 +2858,10 @@ elif page == "🧪 Innovation Lab":
             }
             try:
                 resp = requests.post(
-                    f"{API_URL}/api/v1/explain", json=payload, timeout=10
+                    f"{API_URL}/api/v1/explain",
+                    json=payload,
+                    timeout=10,
+                    headers=_api_headers(),
                 )
                 if resp.status_code == 200:
                     st.json(resp.json())
@@ -2876,6 +2911,7 @@ elif page == "🧪 Innovation Lab":
                         response = requests.get(
                             f"{API_URL}/api/v1/blockchain/verify/{evidence_id}?block_number={block_number}",
                             timeout=10,
+                            headers=_api_headers(),
                         )
 
                         if response.status_code == 200:
@@ -2974,6 +3010,7 @@ elif page == "🧪 Innovation Lab":
                                 f"{API_URL}/api/v1/blockchain/export",
                                 json=payload,
                                 timeout=15,
+                                headers=_api_headers(),
                             )
 
                             if response.status_code == 200:

@@ -161,6 +161,27 @@ def _api_headers(extra: dict | None = None) -> dict:
     return headers
 
 
+def _honeypot_admin_headers() -> dict:
+    """Return the headers required by honeypot admin endpoints.
+
+    Reads ``AEGIS_HONEYPOT_ADMIN_TOKEN`` from the environment first, then
+    falls back to ``st.secrets`` (key ``AEGIS_HONEYPOT_ADMIN_TOKEN``).
+    Returns an empty dict when neither source is configured, so callers
+    can still attempt the request and surface a clear 401/403 rather than
+    crashing before the network call is made.
+    """
+    token = os.getenv("AEGIS_HONEYPOT_ADMIN_TOKEN", "")
+    if not token:
+        try:
+            token = st.secrets.get("AEGIS_HONEYPOT_ADMIN_TOKEN", "")
+        except Exception:
+            token = ""
+    headers: dict = {}
+    if token:
+        headers["X-Honeypot-Token"] = token
+    return headers
+
+
 def _safe_api_get(url: str, timeout: int = 5, extra_headers: dict | None = None) -> dict:
     """GET *url* and return the parsed JSON body on success.
 
@@ -169,7 +190,7 @@ def _safe_api_get(url: str, timeout: int = 5, extra_headers: dict | None = None)
     Streamlit warning banner is shown when the backend is unreachable so
     operators can distinguish "no data" from "API offline".
 
-    Auth headers (``X-API-Key``) are injected automatically via
+Auth headers (``X-API-Key``) are injected automatically via
     ``_api_headers()``.  Pass *extra_headers* for endpoint-specific tokens
     such as ``X-Honeypot-Token``.
     """
@@ -2334,8 +2355,13 @@ elif page == "🧪 Innovation Lab":
 
         st.markdown("---")
 
-        # Honeypot Statistics — auth injected automatically by _safe_api_get
-        stats = _safe_api_get(f"{API_URL}/api/v1/honeypot/stats", timeout=5)
+# Honeypot Statistics — merge API key + honeypot token for admin endpoints
+        _hp_headers = _honeypot_admin_headers()
+        stats = _safe_api_get(
+            f"{API_URL}/api/v1/honeypot/stats",
+            timeout=5,
+            extra_headers=_hp_headers,
+        )
         if stats:
             col1, col2, col3, col4 = st.columns(4)
 
@@ -2382,16 +2408,24 @@ elif page == "🧪 Innovation Lab":
                     f"{arrest_rate_colored} Operational (Operational)",
                 )
         else:
-            st.warning(
-                "⚠️ Honeypot statistics unavailable — ensure the API is running with innovation modules loaded."
-            )
+            if not _hp_headers:
+                st.info(
+                    "💡 Set **AEGIS_HONEYPOT_ADMIN_TOKEN** in your environment or "
+                    "`st.secrets` to enable honeypot admin statistics."
+                )
+            else:
+                st.warning("⚠️ Honeypot statistics unavailable — ensure the API is running with innovation modules loaded.")
 
         st.markdown("---")
 
         # Active Honeypots — auth injected automatically by _safe_api_get
         st.subheader("🎭 Active Honeypot Traps")
 
-        active_data = _safe_api_get(f"{API_URL}/api/v1/honeypot/active", timeout=5)
+        active_data = _safe_api_get(
+            f"{API_URL}/api/v1/honeypot/active",
+            timeout=5,
+            extra_headers=_hp_headers,
+        )
         active = active_data.get("active_honeypots", []) if active_data else []
 
         if len(active) > 0:

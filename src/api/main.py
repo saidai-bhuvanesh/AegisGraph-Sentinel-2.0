@@ -22,7 +22,27 @@ from functools import partial
 from pathlib import Path
 from itertools import islice
 from threading import Lock
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
+
+class LRUCache(OrderedDict):
+    """A simple LRU cache to prevent memory leaks in global dictionaries."""
+    def __init__(self, maxsize=10000, *args, **kwds):
+        self.maxsize = maxsize
+        super().__init__(*args, **kwds)
+        
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+        
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.maxsize:
+            oldest = next(iter(self))
+            del self[oldest]
 
 import networkx as nx
 import numpy as np
@@ -802,7 +822,7 @@ class AppState:
         self.account_profiles = {}
         self.graph_loaded = False
         # Lateral movement detection - rolling betweenness centrality baseline
-        self.centrality_baseline = {}  # {account_id: [centrality_history]}
+        self.centrality_baseline = LRUCache(maxsize=10000)  # {account_id: [centrality_history]}
         self.centrality_window_size = 10  # Track last 10 measurements
         # Innovation managers (dynamically registered in services container via properties)
 
@@ -2093,7 +2113,7 @@ async def check_batch_transactions(request: BatchTransactionRequest):
     txns = request.transactions
 
     # Per-batch subgraph cache shared across all concurrent scorer calls
-    batch_subgraph_cache: Dict = {}
+    batch_subgraph_cache: Dict = LRUCache(maxsize=1000)
     batch_subgraph_lock: Lock = Lock()
 
     async def _process_transaction(txn_request):
@@ -2773,6 +2793,38 @@ async def summarize_alert(request: AlertSummaryRequest):
             metadata={"operation": "Alert summary", "error_type": type(e).__name__},
         )
         raise HTTPException(status_code=500, detail="Failed to generate AI summary")
+
+
+@app.get("/api/v1/monitoring/memory", tags=["Monitoring"], dependencies=[Depends(require_role(Role.ADMIN))])
+async def get_memory_diagnostics():
+    """Diagnostic endpoint to inspect memory usage and cache sizes."""
+    import sys
+    try:
+        import psutil
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        rss_mb = memory_info.rss / 1024 / 1024
+        vms_mb = memory_info.vms / 1024 / 1024
+    except ImportError:
+        rss_mb = -1
+        vms_mb = -1
+
+    return {
+        "status": "ok",
+        "memory": {
+            "rss_mb": round(rss_mb, 2) if rss_mb > 0 else "psutil not installed",
+            "vms_mb": round(vms_mb, 2) if vms_mb > 0 else "psutil not installed"
+        },
+        "caches": {
+            "centrality_baseline_size": len(state.centrality_baseline),
+            "centrality_baseline_maxsize": getattr(state.centrality_baseline, "maxsize", None),
+            "account_profiles_size": len(state.account_profiles),
+            "fraud_chains_size": len(state.fraud_chains)
+        },
+        "globals": {
+            "mule_accounts_size": len(state.mule_accounts)
+        }
+    }
 
 
 def main():

@@ -29,7 +29,24 @@ model:
     num_heads: 4
     dropout: 0.3
     activation: "relu"
-  
+    
+  # GraphSAGE Architecture
+  graphsage:
+    aggregator: "mean" # mean, pooling, lstm
+    dropout: 0.3
+    
+  # TGAT Architecture
+  tgat:
+    num_heads: 4
+    dropout: 0.3
+    temporal_dim: 16
+    
+  # TGN Architecture
+  tgn:
+    memory_dim: 128
+    temporal_dim: 16
+    dropout: 0.3
+
   # Temporal Settings
   temporal:
     time_encoding_dim: 16

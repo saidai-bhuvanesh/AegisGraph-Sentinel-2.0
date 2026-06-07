@@ -20,7 +20,7 @@ try:
     from torch_geometric.utils import softmax
     TORCH_GEOMETRIC_AVAILABLE = True
 except ImportError:
-    print("⚠️  torch_geometric not available - HTGAT will use fallback implementation")
+    print("WARNING: torch_geometric not available - HTGAT will use fallback implementation")
     class MessagePassing(nn.Module):
         def __init__(self, **kwargs):
             super().__init__()
@@ -314,6 +314,9 @@ class HTGATConv(MessagePassing):
         alpha = torch.zeros(num_edges, H, device=x_i.device)
         
         # Compute attention for each edge type separately
+        # Ensure edge_type is defined; treat all edges as a single type if None
+        if edge_type is None:
+            edge_type = torch.zeros(num_edges, dtype=torch.long, device=x_i.device)
         for rel_type in range(self.num_edge_types):
             mask = edge_type == rel_type
             if not mask.any():

@@ -1,0 +1,125 @@
+best_epoch: 0
+best_val_f1: 0.0
+train_metrics:
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - &id001 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 0
+  f1: 0.0
+  fn: 4
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.07470618560910225
+  pr_auc: 0.0
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 6
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 1
+  f1: 0.0
+  fn: 4
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.0759323701262474
+  pr_auc: 0.0
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 6
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 2
+  f1: 0.0
+  fn: 4
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.07969702035188675
+  pr_auc: 0.0
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 6
+  tp: 0
+val_metrics:
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 0
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.07873213042815526
+  pr_auc: 0.225
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 3
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 1
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.08143291311959426
+  pr_auc: 0.225
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 3
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 2
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.0726244921485583
+  pr_auc: 0.225
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.0
+  tn: 3
+  tp: 0

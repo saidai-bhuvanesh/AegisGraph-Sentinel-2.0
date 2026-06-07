@@ -17,236 +17,236 @@ test_metrics:
     - -1
     - 0
   - !!binary |
-    AAAAAAAA8D8=
+    AAAAAAAAAAA=
   epoch: 6
-  f1: 1.0
-  fn: 0
+  f1: 0.0
+  fn: 3
   fp: 0
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 1.1435150616939237e-14
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.1644103080034256
   pr_auc: 0.0
-  precision: 1.0
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
   tn: 0
-  tp: 3
+  tp: 0
 train_metrics:
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
     27Zt27Ztyz8=
   epoch: 0
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
+  f1: 0.26666666666666666
+  fn: 1
+  fp: 10
+  fraud_f1: 0.8
   fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 0.03366188891232014
+  fraud_recall: 0.6666666666666666
+  loss: 0.12078821286559105
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.16666666666666666
+  recall: 0.6666666666666666
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 1
+  tp: 2
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    27Zt27Ztyz8=
+    SZIkSZIk6T8=
   epoch: 1
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 0.013518903055228293
+  f1: 0.0
+  fn: 3
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.07924610748887062
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 11
+  tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    27Zt27Ztyz8=
+    SZIkSZIk6T8=
   epoch: 2
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 0.001980232606001664
+  f1: 0.0
+  fn: 3
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.06534746987745166
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 11
+  tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    27Zt27Ztyz8=
+    SZIkSZIk6T8=
   epoch: 3
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 5.255496807876625e-05
+  f1: 0.0
+  fn: 3
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.04033762635663152
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 11
+  tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    27Zt27Ztyz8=
+    SZIkSZIk6T8=
   epoch: 4
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 8.403925715327887e-07
+  f1: 0.0
+  fn: 3
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.05237918393686414
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 11
+  tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    27Zt27Ztyz8=
+    SZIkSZIk6T8=
   epoch: 5
-  f1: 0.35294117647058826
-  fn: 0
-  fp: 11
-  fraud_f1: 1.0
-  fraud_precision: 1.0
-  fraud_recall: 1.0
-  loss: 1.7218335468527357e-07
+  f1: 0.0
+  fn: 3
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.038498415844514966
   pr_auc: 0.0
-  precision: 0.21428571428571427
-  recall: 1.0
+  precision: 0.0
+  recall: 0.0
   roc_auc: 0.0
-  tn: 0
-  tp: 3
+  tn: 11
+  tp: 0
 val_metrics:
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 0
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 0.02295435033738613
+  loss: 0.11418423056602478
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 1
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 0.002357105491682887
+  loss: 0.04583744704723358
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 2
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 3.742755507119e-05
+  loss: 0.01265683677047491
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 3
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 6.434245847231068e-07
+  loss: 0.010467611253261566
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 4
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 2.8059986334483256e-08
+  loss: 0.011270995251834393
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0
 - accuracy: !!python/object/apply:numpy._core.multiarray.scalar
   - *id001
   - !!binary |
-    AAAAAAAAAAA=
+    AAAAAAAA8D8=
   epoch: 5
   f1: 0.0
   fn: 0
-  fp: 3
+  fp: 0
   fraud_f1: 0.0
   fraud_precision: 0.0
   fraud_recall: 0.0
-  loss: 3.2668248106659803e-09
+  loss: 0.02006402052938938
   pr_auc: 0.0
   precision: 0.0
   recall: 0.0
   roc_auc: 0.0
-  tn: 0
+  tn: 3
   tp: 0

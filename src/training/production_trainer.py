@@ -32,6 +32,80 @@ logger = logging.getLogger(__name__)
 from .losses import FocalLoss
 from .model_registry import ModelRegistry
 
+try:
+    from torch_geometric.data import Data, Batch
+    TORCH_GEOMETRIC_AVAILABLE = True
+except ImportError:
+    class Data:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        def to(self, device):
+            for k, v in self.__dict__.items():
+                if isinstance(v, torch.Tensor):
+                    setattr(self, k, v.to(device))
+            return self
+
+    class Batch:
+        @staticmethod
+        def from_data_list(data_list: list):
+            xs = [d.x for d in data_list]
+            x = torch.cat(xs, dim=0)
+            node_types = [d.node_type for d in data_list]
+            node_type = torch.cat(node_types, dim=0)
+            
+            # Extract labels correctly
+            ys = []
+            for d in data_list:
+                val = d.y
+                if val.dim() == 0:
+                    val = val.unsqueeze(0)
+                ys.append(val)
+            y = torch.cat(ys, dim=0)
+            
+            batch_indices = []
+            for idx, d in enumerate(data_list):
+                batch_indices.append(torch.full((d.x.size(0),), idx, dtype=torch.long, device=d.x.device))
+            batch = torch.cat(batch_indices, dim=0)
+            
+            cumulative_nodes = 0
+            edge_indices = []
+            edge_types = []
+            edge_attrs = []
+            edge_timestamps = []
+            
+            for d in data_list:
+                edge_index = d.edge_index
+                if edge_index.numel() > 0:
+                    edge_indices.append(edge_index + cumulative_nodes)
+                else:
+                    edge_indices.append(edge_index)
+                edge_types.append(d.edge_type)
+                if getattr(d, 'edge_attr', None) is not None:
+                    edge_attrs.append(d.edge_attr)
+                if getattr(d, 'edge_timestamp', None) is not None:
+                    edge_timestamps.append(d.edge_timestamp)
+                cumulative_nodes += d.x.size(0)
+                
+            edge_index = torch.cat(edge_indices, dim=1) if any(ei.numel() > 0 for ei in edge_indices) else torch.zeros((2, 0), dtype=torch.long, device=x.device)
+            edge_type = torch.cat(edge_types, dim=0)
+            
+            edge_attr = torch.cat(edge_attrs, dim=0) if edge_attrs else None
+            edge_timestamp = torch.cat(edge_timestamps, dim=0) if edge_timestamps else None
+            
+            return Data(
+                x=x,
+                edge_index=edge_index,
+                node_type=node_type,
+                edge_type=edge_type,
+                edge_attr=edge_attr,
+                edge_timestamp=edge_timestamp,
+                y=y,
+                batch=batch,
+                num_graphs=len(data_list)
+            )
+    TORCH_GEOMETRIC_AVAILABLE = False
+
 
 @dataclass
 class TrainingMetrics:
@@ -497,19 +571,18 @@ class SimpleGraphDataset(Dataset):
         graph_dict = self.graphs[idx]
         label = self.labels[idx]
         
-        # Create PyG Data object
-        from torch_geometric.data import Data
+        # Create Data object
         return Data(
             x=graph_dict['x'],
             edge_index=graph_dict['edge_index'],
             edge_attr=graph_dict['edge_attr'] if 'edge_attr' in graph_dict else None,
             node_type=graph_dict['node_type'],
             edge_type=graph_dict['edge_type'],
+            edge_timestamp=graph_dict.get('edge_timestamp', None),
             y=torch.tensor(label, dtype=torch.long),
         )
 
 
-def collate_graphs(batch: List) -> Dict:
+def collate_graphs(batch: List) -> Data:
     """Collate function for graph batches"""
-    from torch_geometric.data import Batch
     return Batch.from_data_list(batch)

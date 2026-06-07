@@ -1,0 +1,29 @@
+{
+  "versions": [
+    {
+      "version_id": "v_epoch_0",
+      "epoch": 0,
+      "stage": "champion",
+      "metrics": {
+        "epoch": 0,
+        "loss": 0.11418423056602478,
+        "accuracy": 1.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "roc_auc": 0.0,
+        "pr_auc": 0.0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 3,
+        "fraud_precision": 0.0,
+        "fraud_recall": 0.0,
+        "fraud_f1": 0.0
+      },
+      "saved_at": "2026-06-01T14:33:09.028447Z",
+      "artifact_path": "htgnn_v_epoch_0.pt"
+    }
+  ],
+  "champion_version_id": "v_epoch_0"
+}

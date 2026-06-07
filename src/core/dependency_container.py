@@ -43,4 +43,3 @@ class DependencyContainer:
 
 # Global singleton for the DI container
 container = DependencyContainer()
-

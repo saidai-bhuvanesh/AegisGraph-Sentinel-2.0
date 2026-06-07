@@ -1,0 +1,125 @@
+best_epoch: 0
+best_val_f1: 0.0
+train_metrics:
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - &id001 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - !!binary |
+    AAAAAAAA4D8=
+  epoch: 0
+  f1: 0.4444444444444444
+  fn: 2
+  fp: 3
+  fraud_f1: 0.6666666666666666
+  fraud_precision: 1.0
+  fraud_recall: 0.5
+  loss: 0.15772510319948196
+  pr_auc: 0.0
+  precision: 0.4
+  recall: 0.5
+  roc_auc: 0.0
+  tn: 3
+  tp: 2
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    ZmZmZmZm5j8=
+  epoch: 1
+  f1: 0.4
+  fn: 3
+  fp: 0
+  fraud_f1: 0.4
+  fraud_precision: 1.0
+  fraud_recall: 0.25
+  loss: 0.05285809375345707
+  pr_auc: 0.0
+  precision: 1.0
+  recall: 0.25
+  roc_auc: 0.0
+  tn: 6
+  tp: 1
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    zczMzMzM7D8=
+  epoch: 2
+  f1: 0.8571428571428571
+  fn: 1
+  fp: 0
+  fraud_f1: 0.8571428571428571
+  fraud_precision: 1.0
+  fraud_recall: 0.75
+  loss: 0.015058904001489282
+  pr_auc: 0.0
+  precision: 1.0
+  recall: 0.75
+  roc_auc: 0.0
+  tn: 6
+  tp: 3
+val_metrics:
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 0
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.11562087386846542
+  pr_auc: 0.29166666666666663
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.33333333333333337
+  tn: 3
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 1
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.14329754561185837
+  pr_auc: 0.29166666666666663
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.33333333333333337
+  tn: 3
+  tp: 0
+- accuracy: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    MzMzMzMz4z8=
+  epoch: 2
+  f1: 0.0
+  fn: 2
+  fp: 0
+  fraud_f1: 0.0
+  fraud_precision: 0.0
+  fraud_recall: 0.0
+  loss: 0.1434862551589807
+  pr_auc: 0.29166666666666663
+  precision: 0.0
+  recall: 0.0
+  roc_auc: 0.33333333333333337
+  tn: 3
+  tp: 0

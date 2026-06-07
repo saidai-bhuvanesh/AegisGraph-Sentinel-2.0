@@ -64,3 +64,15 @@ jobs:
       run: |
         # Ensure the main route entry definitions can compile flawlessly in production
         python -m py_compile src/api/main.py
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Verify Docker Build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        tags: aegisgraph-sentinel:latest
+

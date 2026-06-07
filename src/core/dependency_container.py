@@ -39,3 +39,8 @@ class DependencyContainer:
         """Retrieve a service, returning None if not found or if set to None."""
         with self._lock:
             return self._services.get(name)
+
+
+# Global singleton for the DI container
+container = DependencyContainer()
+

@@ -1,0 +1,72 @@
+replicaCount: 2
+
+image:
+  repository: aegisgraph-sentinel
+  tag: "2.0.0"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+env:
+  ENV: "production"
+  ALLOWED_ORIGINS: "https://aegis.enterprise.io"
+  REDIS_URL: "redis://aegisgraph-sentinel-redis-master:6379"
+  NEO4J_URL: "bolt://aegisgraph-sentinel-neo4j:7687"
+  KAFKA_BOOTSTRAP_SERVERS: "aegis-kafka:9092"
+
+secrets:
+  NEO4J_PASSWORD: "password"
+  JWT_SECRET: "supersecretjwtsecretkey"
+  AEGIS_API_KEY_HASHES: "test-hash-1,test-hash-2"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: aegis.enterprise.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: aegis-tls-secret
+      hosts:
+        - aegis.enterprise.io
+
+resources:
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+networkPolicy:
+  enabled: true
+
+# Enable/disable dependency sub-charts
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  architecture: standalone
+
+neo4j:
+  enabled: true
+  neo4j:
+    password: "password"
+    acceptLicenseAgreement: "yes"

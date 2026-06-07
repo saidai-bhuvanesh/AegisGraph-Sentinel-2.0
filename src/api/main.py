@@ -1460,6 +1460,27 @@ async def lifespan(app: FastAPI):
     stale_cleanup_task = asyncio.create_task(_stale_cleanup_loop())
 
     await lifecycle_manager.startup()
+
+    # --- Initialize & Start Kafka Streaming Infrastructure ---
+    kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
+    from src.streaming.producer import KafkaProducerWrapper
+    from src.streaming.consumer import KafkaConsumerWorker
+    from src.core.dependency_container import container
+
+    producer = KafkaProducerWrapper(bootstrap_servers=kafka_servers)
+    await producer.start()
+    container.register("kafka_producer", producer, replace=True)
+    
+    consumer = KafkaConsumerWorker(
+        bootstrap_servers=kafka_servers,
+        group_id="aegis-sentinel-group",
+        topic="aegis-transactions"
+    )
+    await consumer.start()
+    container.register("kafka_consumer", consumer, replace=True)
+    app.state.kafka_consumer = consumer
+    # ---------------------------------------------------------
+
     try:
         yield
     finally:
@@ -1469,7 +1490,21 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+        # Stop Kafka consumer & producer
+        if container.has("kafka_consumer"):
+            try:
+                await container.get("kafka_consumer").stop()
+            except Exception as exc:
+                startup_logger.error(f"Error stopping Kafka consumer worker: {exc}")
+                
+        if container.has("kafka_producer"):
+            try:
+                await container.get("kafka_producer").stop()
+            except Exception as exc:
+                startup_logger.error(f"Error stopping Kafka producer: {exc}")
+
         await lifecycle_manager.shutdown()
+
 
 import os
 SWAGGER_ENABLED = os.getenv("SWAGGER_ENABLED", "true").lower() == "true"
@@ -1539,8 +1574,12 @@ register_exception_handlers(app)
 register_observability_middleware(app)
 
 
+from src.api.routes.stream_routes import router as stream_router
+app.include_router(stream_router, prefix="/api/v1/stream", tags=["Streaming"])
+
 
 @app.get("/", tags=["Health"])
+
 async def root():
     """Root endpoint"""
     return {

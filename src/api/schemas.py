@@ -934,3 +934,151 @@ class CaseDashboardResponse(BaseModel):
     escalated_cases: int
     by_status: Dict[str, int]
     by_priority: Dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# AI Copilot Schemas (Phase 6)
+# ---------------------------------------------------------------------------
+
+class CopilotSummaryResponse(BaseModel):
+    """AI-generated case summary details."""
+    case_id: str
+    summary: str
+    suspicious_activity: List[str]
+    key_risk_factors: List[str]
+    unusual_patterns: List[str]
+    created_at: str
+
+
+class CopilotExplanationResponse(BaseModel):
+    """AI-generated risk score and network traversal explanations."""
+    case_id: str
+    risk_score: float
+    breakdown_explanation: str
+    graph_relationship_explanation: str
+    mule_detection_reasoning: str
+    htgnn_decisions_explanation: str
+    created_at: str
+
+
+class CopilotTimelineEvent(BaseModel):
+    """Chronological event enriched with AI narrative."""
+    timestamp: str
+    type: str
+    action: str
+    description: str
+    narrative: str
+
+
+class CopilotTimelineResponse(BaseModel):
+    """Timeline of events enriched with AI narratives."""
+    case_id: str
+    events: List[CopilotTimelineEvent]
+
+
+class CopilotRecommendationResponse(BaseModel):
+    """AI recommendations for fraud operations."""
+    case_id: str
+    recommended_actions: List[str]
+    reasoning: str
+    escalation_path: str
+    created_at: str
+
+
+class CopilotAskRequest(BaseModel):
+    """Request for asking the AI Copilot a question about a case."""
+    question: str = Field(..., max_length=1000, description="The query to ask the AI copilot.")
+
+
+class CopilotAskResponse(BaseModel):
+    """Response containing the AI Copilot's answer."""
+    case_id: str
+    answer: str
+    timestamp: str
+
+
+class AnalystFeedbackRequest(BaseModel):
+    """Request to submit feedback on AI-generated copilot insights."""
+    usefulness_score: int = Field(..., ge=1, le=5, description="Usefulness rating from 1 (poor) to 5 (excellent).")
+    feedback_text: Optional[str] = Field(None, max_length=2000, description="Optional written notes from the analyst.")
+
+
+class AnalystFeedbackResponse(BaseModel):
+    """Response after submitting analyst feedback."""
+    feedback_id: str
+    case_id: str
+    analyst_id: str
+    usefulness_score: int
+    feedback_text: Optional[str]
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Threat Intelligence Schemas (Phase 7)
+# ---------------------------------------------------------------------------
+
+class ThreatFeedIndicatorResponse(BaseModel):
+    """A threat indicator of compromise (IOC)."""
+    indicator_id: str
+    indicator_type: str
+    value: str
+    source_feed: str
+    threat_score: float
+    confidence: float
+    last_seen: str
+
+
+class ThreatActorProfileResponse(BaseModel):
+    """Profile of a tracked threat actor group."""
+    actor_id: str
+    name: str
+    risk_score: float
+    associated_accounts: List[str]
+    associated_devices: List[str]
+    associated_ips: List[str]
+    campaign_ids: List[str]
+    created_at: str
+    updated_at: str
+
+
+class FraudCampaignResponse(BaseModel):
+    """Details of a tracked coordinated fraud campaign."""
+    campaign_id: str
+    name: str
+    description: str
+    attack_pattern: str
+    severity: str
+    status: str
+    threat_actor_id: Optional[str] = None
+    case_ids: List[str]
+    start_time: str
+    end_time: Optional[str] = None
+
+
+class ThreatCorrelationResponse(BaseModel):
+    """Correlated fraud alert group."""
+    correlation_id: str
+    case_ids: List[str]
+    similarity_score: float
+    common_features: List[str]
+    description: str
+    created_at: str
+
+
+class CommandCenterStatsResponse(BaseModel):
+    """Central stats for the Fraud Command Center dashboard."""
+    total_correlated_alerts: int
+    active_campaigns_count: int
+    total_threat_indicators: int
+    global_threat_level: float
+
+
+class AddThreatIndicatorRequest(BaseModel):
+    """Request to manually add a threat indicator of compromise."""
+    indicator_type: str = Field(..., description="IP | DEVICE | ACCOUNT")
+    value: str = Field(..., description="e.g. 192.168.1.1")
+    source_feed: str = Field("MANUAL_ANALYST", description="The source of the threat feed")
+    threat_score: float = Field(..., ge=0, le=1, description="Threat score from 0.0 to 1.0")
+    confidence: float = Field(..., ge=0, le=1, description="Confidence rating from 0.0 to 1.0")
+
+

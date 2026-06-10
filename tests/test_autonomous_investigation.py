@@ -190,7 +190,7 @@ class TestEvidenceCollector:
             )
             return evidence
 
-        evidence = asyncio.get_event_loop().run_until_complete(run_test())
+        evidence = asyncio.run(run_test())
 
         assert isinstance(evidence, list)
 
@@ -228,7 +228,7 @@ class TestDecisionIntelligence:
             )
             return decision
 
-        decision = asyncio.get_event_loop().run_until_complete(run_test())
+        decision = asyncio.run(run_test())
 
         assert decision.case_id == "case-1"
         assert decision.confidence > 0
@@ -330,7 +330,7 @@ class TestRecommendationEngine:
             action = await engine.get_next_action_suggestion(case, [])
             return action
 
-        action = asyncio.get_event_loop().run_until_complete(run_test())
+        action = asyncio.run(run_test())
 
         assert isinstance(action, str)
         assert len(action) > 0
@@ -375,7 +375,7 @@ class TestExplainability:
             explanation = await engine.explain_decision(decision, case, [])
             return explanation
 
-        explanation = asyncio.get_event_loop().run_until_complete(run_test())
+        explanation = asyncio.run(run_test())
 
         assert "explanation_id" in explanation
         assert explanation["confidence"] == 0.8
@@ -403,7 +403,7 @@ class TestInvestigationService:
             )
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
 
         assert "case_id" in result
         assert result["title"] == "Test Investigation"
@@ -424,7 +424,7 @@ class TestInvestigationService:
             result = await service.list_investigations()
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
 
         assert isinstance(result, list)
         assert len(result) >= 1
@@ -439,7 +439,7 @@ class TestInvestigationService:
             dashboard = await service.get_dashboard()
             return dashboard
 
-        dashboard = asyncio.get_event_loop().run_until_complete(run_test())
+        dashboard = asyncio.run(run_test())
 
         assert "total_cases" in dashboard
         assert "open_cases" in dashboard

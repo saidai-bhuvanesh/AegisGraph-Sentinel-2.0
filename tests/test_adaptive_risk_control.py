@@ -148,6 +148,9 @@ class TestAdaptiveRiskEngine:
 
         engine = get_risk_engine()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             assessment = await engine.evaluate_risk(
                 entity_id="entity-1",
@@ -160,7 +163,8 @@ class TestAdaptiveRiskEngine:
             )
             return assessment
 
-        assessment = asyncio.get_event_loop().run_until_complete(run_test())
+        assessment = loop.run_until_complete(run_test())
+        loop.close()
 
         assert assessment.assessment_id is not None
         assert assessment.risk_score >= 0
@@ -202,11 +206,15 @@ class TestFraudPreventionEngine:
             indicators=["fraud_indicators"],
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             result = await engine.prevent_fraud(assessment)
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = loop.run_until_complete(run_test())
+        loop.close()
 
         assert result["prevented"] is True
         assert "block" in str(result["actions_taken"]).lower()
@@ -229,6 +237,9 @@ class TestFraudPreventionEngine:
             indicators=["vpn_detected"],
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             attempt = await engine.record_fraud_attempt(
                 entity_id="entity-1",
@@ -236,7 +247,8 @@ class TestFraudPreventionEngine:
             )
             return attempt
 
-        attempt = asyncio.get_event_loop().run_until_complete(run_test())
+        attempt = loop.run_until_complete(run_test())
+        loop.close()
 
         assert attempt.attempt_id is not None
         assert attempt.entity_id == "entity-1"
@@ -256,6 +268,9 @@ class TestPolicyDecisionEngine:
 
         engine = get_policy_engine()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             policy = await engine.create_policy(
                 name="High Risk Policy",
@@ -265,7 +280,8 @@ class TestPolicyDecisionEngine:
             )
             return policy
 
-        policy = asyncio.get_event_loop().run_until_complete(run_test())
+        policy = loop.run_until_complete(run_test())
+        loop.close()
 
         assert policy.policy_id is not None
         assert policy.name == "High Risk Policy"
@@ -277,6 +293,9 @@ class TestPolicyDecisionEngine:
 
         engine = get_policy_engine()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             rule = await engine.create_control_rule(
                 name="Velocity Rule",
@@ -287,7 +306,8 @@ class TestPolicyDecisionEngine:
             )
             return rule
 
-        rule = asyncio.get_event_loop().run_until_complete(run_test())
+        rule = loop.run_until_complete(run_test())
+        loop.close()
 
         assert rule.rule_id is not None
         assert rule.name == "Velocity Rule"
@@ -316,11 +336,15 @@ class TestDynamicControlManager:
             risk_threshold=0.7,
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             result = await manager.activate_control(rule)
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = loop.run_until_complete(run_test())
+        loop.close()
 
         assert result["status"] == "active"
         assert result["control_id"] == "rule-1"
@@ -340,18 +364,22 @@ class TestDynamicControlManager:
             risk_threshold=0.7,
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         # First activate
         async def activate():
             await manager.activate_control(rule)
 
-        asyncio.get_event_loop().run_until_complete(activate())
+        loop.run_until_complete(activate())
 
         # Then deactivate
         async def deactivate():
             result = await manager.deactivate_control("rule-1", "Test deactivation")
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(deactivate())
+        result = loop.run_until_complete(deactivate())
+        loop.close()
 
         assert result["status"] == "inactive"
 
@@ -381,11 +409,15 @@ class TestRealTimeMitigationEngine:
             indicators=[],
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             result = await engine.execute_mitigation(assessment, MitigationAction.BLOCK)
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = loop.run_until_complete(run_test())
+        loop.close()
 
         assert result["action"] == "block"
         assert result["status"] == "executed"
@@ -419,6 +451,9 @@ class TestPolicyRecommendationEngine:
             for i in range(5)
         ]
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             recommendations = await engine.generate_recommendations(
                 entity_id="entity-1",
@@ -426,7 +461,8 @@ class TestPolicyRecommendationEngine:
             )
             return recommendations
 
-        recommendations = asyncio.get_event_loop().run_until_complete(run_test())
+        recommendations = loop.run_until_complete(run_test())
+        loop.close()
 
         assert isinstance(recommendations, list)
 
@@ -455,11 +491,15 @@ class TestAdaptiveLearningEngine:
             model_version="1.0.0",
         )
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             result = await engine.process_feedback(feedback)
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = loop.run_until_complete(run_test())
+        loop.close()
 
         assert result["processed"] is True
         assert result["feedback_id"] == "feedback-1"
@@ -470,11 +510,15 @@ class TestAdaptiveLearningEngine:
 
         engine = get_learning_engine()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             stats = await engine.get_learning_stats()
             return stats
 
-        stats = asyncio.get_event_loop().run_until_complete(run_test())
+        stats = loop.run_until_complete(run_test())
+        loop.close()
 
         assert "total_feedback" in stats
         assert "model_version" in stats
@@ -493,6 +537,9 @@ class TestAdaptiveRiskControlService:
 
         service = get_prevention_service()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             result = await service.evaluate_risk(
                 entity_id="entity-1",
@@ -504,7 +551,8 @@ class TestAdaptiveRiskControlService:
             )
             return result
 
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = loop.run_until_complete(run_test())
+        loop.close()
 
         assert "assessment_id" in result
         assert "risk_score" in result
@@ -516,11 +564,15 @@ class TestAdaptiveRiskControlService:
 
         service = get_prevention_service()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             dashboard = await service.get_dashboard()
             return dashboard
 
-        dashboard = asyncio.get_event_loop().run_until_complete(run_test())
+        dashboard = loop.run_until_complete(run_test())
+        loop.close()
 
         assert "risk_stats" in dashboard
         assert "active_controls" in dashboard
@@ -531,11 +583,15 @@ class TestAdaptiveRiskControlService:
 
         service = get_prevention_service()
 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         async def run_test():
             policies = await service.get_policies()
             return policies
 
-        policies = asyncio.get_event_loop().run_until_complete(run_test())
+        policies = loop.run_until_complete(run_test())
+        loop.close()
 
         assert isinstance(policies, list)
 

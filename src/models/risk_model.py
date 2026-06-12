@@ -311,6 +311,8 @@ class MultiTaskFraudModel(nn.Module):
         edge_type: torch.LongTensor,
         edge_timestamp: torch.Tensor,
         batch: Optional[torch.LongTensor] = None,
+        return_embedding: bool = False,
+        return_attention_weights: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for multi-task model

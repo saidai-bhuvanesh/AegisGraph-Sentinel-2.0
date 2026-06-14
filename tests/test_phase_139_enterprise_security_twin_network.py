@@ -60,7 +60,7 @@ def test_service_methods():
     assert srv.create_twin(name="test", target_tenant="test") is not None
     assert srv.sync_twin_state(twin_id="test") is not None
     assert srv.run_risk_forecast(twin_id="test") is not None
-    assert srv.update_entity_state(twin_id="test", entity_id="test", variables={}, Any]="test") is not None
+    assert srv.update_entity_state(twin_id="test", entity_id="test", variables={}) is not None
     assert srv.execute("tenant-123")["status"] == "success"
 
 def test_analytics():

@@ -58,7 +58,7 @@ def test_store_operations():
 def test_service_methods():
     srv = get_service()
     assert srv.bridge_domains(source="test", dest="test") is not None
-    assert srv.publish_signal(domain="test", payload={}, Any]="test") is not None
+    assert srv.publish_signal(domain="test", payload={}) is not None
     assert srv.get_unified_context(entity_id="test") is not None
     assert srv.get_hub_status(hub_id="test") is not None
     assert srv.execute("tenant-123")["status"] == "success"

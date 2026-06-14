@@ -60,7 +60,7 @@ def test_service_methods():
     assert srv.register_command_node(region="test", sector="test") is not None
     assert srv.coordinate_defense(campaign_desc="test", targets=[]) is not None
     assert srv.issue_directive(campaign_id="test", instructions="test") is not None
-    assert srv.send_telemetry(node_id="test", kpis={}, float]="test") is not None
+    assert srv.send_telemetry(node_id="test", kpis={}) is not None
     assert srv.execute("tenant-123")["status"] == "success"
 
 def test_analytics():
